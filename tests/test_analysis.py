@@ -2,36 +2,32 @@ import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-import httpx
 
+from lichess_mock import LichessMock
 from trainer.bootstrap import create_app
 from trainer.config import Settings
 
 
 def test_analysis_shows_initial_board_and_player_critical_moment(
     tmp_path: Path,
+    lichess_mock: LichessMock,
 ) -> None:
-    fixture = (Path(__file__).parent / "fixtures" / "lichess_game.ndjson").read_text(
-        encoding="utf-8"
-    )
-
-    def lichess(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text=fixture)
-
     settings = Settings(
         lichess_username="Lance5500",
         database_path=tmp_path / "trainer.db",
     )
-    app = create_app(settings, lichess_transport=httpx.MockTransport(lichess))
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+    )
     with TestClient(app) as client:
         client.post("/sync")
 
-    def fail_if_online(_request: httpx.Request) -> httpx.Response:
-        raise AssertionError("persisted Analysis must open offline")
-
     reopened_app = create_app(
         settings,
-        lichess_transport=httpx.MockTransport(fail_if_online),
+        lichess_transport=lichess_mock.fail_on_request(
+            "persisted Analysis must open offline"
+        ),
     )
     with TestClient(reopened_app) as client:
         response = client.get("/analyses/q7ZvsdUF")
@@ -54,23 +50,23 @@ def test_analysis_shows_initial_board_and_player_critical_moment(
 
 def test_analysis_classifies_from_evaluations_not_lichess_judgment(
     tmp_path: Path,
+    lichess_mock: LichessMock,
 ) -> None:
-    fixture_path = Path(__file__).parent / "fixtures" / "lichess_game.ndjson"
-    document = json.loads(fixture_path.read_text(encoding="utf-8"))
+    document = json.loads(lichess_mock.fixture)
     document["id"] = "misleading-judgment"
     document["moves"] = " ".join(document["moves"].split()[:27])
     document["analysis"] = document["analysis"][:27]
     document["analysis"][26]["judgment"]["name"] = "Blunder"
-
-    def lichess(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text=json.dumps(document))
 
     app = create_app(
         Settings(
             lichess_username="Lance5500",
             database_path=tmp_path / "trainer.db",
         ),
-        lichess_transport=httpx.MockTransport(lichess),
+        lichess_transport=lichess_mock.games_for(
+            "Lance5500",
+            ndjson=json.dumps(document),
+        ),
     )
     with TestClient(app) as client:
         client.post("/sync")

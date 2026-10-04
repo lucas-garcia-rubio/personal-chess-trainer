@@ -37,3 +37,11 @@ A Home estará disponível em <http://127.0.0.1:8000>.
 python -m mypy src tests
 python -m pytest
 ```
+
+Testes que executam Sync devem receber a fixture `lichess_mock` e passar
+`lichess_mock.games_for(username)` como `lichess_transport` para `create_app`.
+O transporte responde com o NDJSON versionado em
+`tests/fixtures/lichess_game.ndjson`, registra as requisições em
+`lichess_mock.requests` e falha localmente para endpoints inesperados. Para
+confirmar que uma página persistida abre offline, use
+`lichess_mock.fail_on_request(reason)` ao reconstruir a aplicação.
