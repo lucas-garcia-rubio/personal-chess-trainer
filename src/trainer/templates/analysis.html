@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  {% macro board(fen, label) -%}
+    <div class="board" aria-label="{{ label }}" data-fen="{{ fen }}">
+      {% for piece in fen|board_pieces %}<span>{{ piece }}</span>{% endfor %}
+    </div>
+  {%- endmacro %}
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Analysis · {{ analysis.opponent }}</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #171512;
+        color: #f3eee4;
+      }
+      main {
+        width: min(68rem, calc(100% - 2rem));
+        margin: 2rem auto;
+      }
+      a { color: #dcb86b; }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(18rem, 32rem) 1fr;
+        gap: 2rem;
+        align-items: start;
+      }
+      .board {
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        aspect-ratio: 1;
+        border: 0.5rem solid #302b24;
+      }
+      .board span {
+        display: grid;
+        place-items: center;
+        font-size: clamp(1.6rem, 6vw, 3.5rem);
+        color: #16130f;
+        background: #e5cf9d;
+      }
+      .board span:nth-child(16n + 2), .board span:nth-child(16n + 4),
+      .board span:nth-child(16n + 6), .board span:nth-child(16n + 8),
+      .board span:nth-child(16n + 9), .board span:nth-child(16n + 11),
+      .board span:nth-child(16n + 13), .board span:nth-child(16n + 15) {
+        background: #8f6746;
+      }
+      .moment {
+        padding: 1rem;
+        border-left: 0.3rem solid #d66a4a;
+        background: #24201b;
+      }
+      @media (max-width: 48rem) {
+        .layout { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a href="/">← Home</a>
+      <h1>Analysis vs {{ analysis.opponent }}</h1>
+      <p>{{ analysis.result }} · {{ analysis.speed }} · {{ analysis.time_control }}</p>
+      <div class="layout">
+        {{ board("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "Initial chess position") }}
+        <section>
+          <h2>Critical Moments</h2>
+          {% for moment in analysis.critical_moments %}
+            <article class="moment" data-position="{{ moment.position_fen }}">
+              <h3>{{ moment.classification }}</h3>
+              {{ board(moment.position_fen, "Position before " ~ moment.played) }}
+              <p>Played: {{ moment.played }}</p>
+              <p>Best: {{ moment.best }}</p>
+              <p>Win%: {{ moment.win_before }} → {{ moment.win_after }}</p>
+            </article>
+          {% else %}
+            <p>No Critical Moments for the Player.</p>
+          {% endfor %}
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

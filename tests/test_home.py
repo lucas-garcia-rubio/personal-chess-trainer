@@ -22,4 +22,4 @@ def test_home_is_served_with_a_real_local_database(tmp_path: Path) -> None:
     assert "Personal Chess Trainer" in response.text
     assert database_path.is_file()
     with sqlite3.connect(database_path) as database:
-        assert database.execute("PRAGMA user_version").fetchone() == (1,)
+        assert database.execute("PRAGMA user_version").fetchone() == (2,)
