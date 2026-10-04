@@ -44,6 +44,7 @@ def test_sync_persists_a_lichess_game_and_home_reopens_offline(
     assert requests[0].url.params["evals"] == "true"
     assert requests[0].url.params["clocks"] == "true"
     assert "authorization" not in requests[0].headers
+    assert requests[0].headers["user-agent"].startswith("personal-chess-trainer/")
 
     with sqlite3.connect(database_path) as database:
         stored_raw = database.execute(

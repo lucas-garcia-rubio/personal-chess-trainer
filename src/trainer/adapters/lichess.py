@@ -12,6 +12,12 @@ class LichessGameSource:
         self._username = username
         self._client = httpx.Client(
             base_url="https://lichess.org",
+            headers={
+                "User-Agent": (
+                    "personal-chess-trainer/0.1 "
+                    "(+https://github.com/lucas-garcia-rubio/personal-chess-trainer)"
+                )
+            },
             transport=transport,
             timeout=30,
         )
