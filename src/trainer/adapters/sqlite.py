@@ -9,6 +9,9 @@ from trainer.domain import (
     EvaluatorProvenance,
     GameMetadata,
     GameSummary,
+    EvaluationScore,
+    PositionEvaluation,
+    ScoreKind,
 )
 
 
@@ -105,6 +108,33 @@ class SQLiteStorage:
             )
             for moment_document in moment_documents
         ]
+        evaluation_documents = cast(
+            list[dict[str, object]], document.get("evaluations", [])
+        )
+        evaluations = [
+            PositionEvaluation(
+                fen=cast(str, evaluation_document["fen"]),
+                score=EvaluationScore(
+                    kind=cast(
+                        ScoreKind,
+                        cast(dict[str, object], evaluation_document["score"])[
+                            "kind"
+                        ],
+                    ),
+                    value=cast(
+                        int,
+                        cast(dict[str, object], evaluation_document["score"])[
+                            "value"
+                        ],
+                    ),
+                ),
+                best_move=cast(str | None, evaluation_document["best_move"]),
+                principal_variation=cast(
+                    list[str], evaluation_document["principal_variation"]
+                ),
+            )
+            for evaluation_document in evaluation_documents
+        ]
         provenance_document = cast(
             dict[str, object],
             document.get(
@@ -135,6 +165,7 @@ class SQLiteStorage:
                 ),
             ),
             critical_moments=moments,
+            evaluations=evaluations,
         )
 
     def close(self) -> None:

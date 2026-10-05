@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Import a Game · Personal Chess Trainer</title>
+  </head>
+  <body>
+    <main>
+      <a href="/">Home</a>
+      <h1>Import a Game</h1>
+      <p>Paste one Standard Game in PGN format.</p>
+      {% if error %}<p role="alert">{{ error }}</p>{% endif %}
+      <form action="/imports" method="post">
+        <label for="pgn">PGN</label>
+        <textarea name="pgn" id="pgn" rows="20" required>{{ pgn }}</textarea>
+        <button type="submit">Analyze Game</button>
+      </form>
+    </main>
+  </body>
+</html>

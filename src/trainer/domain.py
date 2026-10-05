@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import math
 from typing import Literal, NotRequired, TypeAlias, TypedDict
@@ -125,6 +125,7 @@ class Analysis:
     player_color: str
     evaluator: EvaluatorProvenance
     critical_moments: list[CriticalMoment]
+    evaluations: list[PositionEvaluation] = field(default_factory=list)
 
     def to_document(self) -> dict[str, object]:
         return asdict(self)
@@ -279,6 +280,90 @@ def derive_analysis(game: GameDocument, player_username: str) -> Analysis:
             parameters={},
         ),
         critical_moments=moments,
+    )
+
+
+def derive_import_analysis(
+    *,
+    source_id: str,
+    played_at: int,
+    white: str,
+    black: str,
+    result_header: str,
+    speed: str,
+    time_control: str,
+    moves: list[chess.Move],
+    evaluation_run: EvaluationRun,
+    player_username: str,
+) -> Analysis:
+    player_is_white = white.casefold() == player_username.casefold()
+    player_color = "white" if player_is_white else "black"
+    opponent = black if player_is_white else white
+    winner = (
+        "white"
+        if result_header == "1-0"
+        else "black"
+        if result_header == "0-1"
+        else None
+    )
+    result = "draw" if winner is None else ("win" if winner == player_color else "loss")
+    board = chess.Board()
+    moments: list[CriticalMoment] = []
+
+    for index, move in enumerate(moves):
+        before = evaluation_run.evaluations[index]
+        after = evaluation_run.evaluations[index + 1]
+        mover_is_white = board.turn == chess.WHITE
+        played = board.san(move)
+        if mover_is_white == player_is_white:
+            classification = _classify(
+                (before.score.kind, before.score.value),
+                (after.score.kind, after.score.value),
+                mover_is_white,
+            )
+            best_uci = (
+                before.principal_variation[0]
+                if before.principal_variation
+                else before.best_move
+            )
+            if classification is not None and best_uci is not None:
+                best = board.san(board.parse_uci(best_uci))
+                moments.append(
+                    CriticalMoment(
+                        ply=index + 1,
+                        position_fen=board.fen(),
+                        played=played,
+                        best=best,
+                        classification=classification,
+                        win_before=round(
+                            _win_percent(
+                                (before.score.kind, before.score.value),
+                                player_is_white,
+                            ),
+                            1,
+                        ),
+                        win_after=round(
+                            _win_percent(
+                                (after.score.kind, after.score.value),
+                                player_is_white,
+                            ),
+                            1,
+                        ),
+                    )
+                )
+        board.push(move)
+
+    return Analysis(
+        source_id=source_id,
+        created_at=played_at,
+        opponent=opponent,
+        result=result,
+        speed=speed,
+        time_control=time_control,
+        player_color=player_color,
+        evaluator=evaluation_run.provenance,
+        critical_moments=moments,
+        evaluations=evaluation_run.evaluations,
     )
 
 
