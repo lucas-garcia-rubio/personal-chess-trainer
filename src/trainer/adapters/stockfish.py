@@ -121,11 +121,14 @@ class _UciSession:
     def provenance(self) -> EvaluatorProvenance:
         name = self._engine_name if self._engine_name is not None else "unknown"
         return EvaluatorProvenance(
+            source_kind="local-engine",
             name=name,
             version=_detect_version(name),
-            depth=self._settings.depth,
-            threads=self._settings.threads,
-            hash_mb=self._settings.hash_mb,
+            parameters={
+                "depth": self._settings.depth,
+                "threads": self._settings.threads,
+                "hash_mb": self._settings.hash_mb,
+            },
         )
 
     def evaluate(self, fen: str) -> PositionEvaluation:

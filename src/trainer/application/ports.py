@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from typing import Protocol
 
-from trainer.domain import Analysis, EvaluationRun, GameSummary
+from trainer.domain import Analysis, EvaluationRun, GameMetadata, GameSummary
 
 
 class GameSource(Protocol):
@@ -15,10 +15,12 @@ class PositionEvaluator(Protocol):
 
 
 class LocalStorage(Protocol):
-    def save_game(self, raw_document: str, analysis: Analysis) -> None: ...
+    def save_game(
+        self, raw_document: str, metadata: GameMetadata, analysis: Analysis
+    ) -> None: ...
 
     def list_games(self) -> list[GameSummary]: ...
 
-    def get_analysis(self, source_id: str) -> Analysis | None: ...
+    def get_analysis(self, origin: str, origin_id: str) -> Analysis | None: ...
 
     def close(self) -> None: ...

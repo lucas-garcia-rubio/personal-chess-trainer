@@ -15,7 +15,7 @@
         <ul>
           {% for game in games %}
             <li>
-              <a href="/analyses/{{ game.source_id }}">{{ game.opponent }}</a>
+              <a href="/analyses/{{ game.origin }}/{{ game.origin_id }}">{{ game.opponent }}</a>
               <span>{{ game.result }} · {{ game.speed }} · {{ game.critical_count }} Critical Moments</span>
             </li>
           {% endfor %}

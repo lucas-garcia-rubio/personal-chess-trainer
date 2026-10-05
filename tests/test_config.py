@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from trainer.config import ConfigError, EngineSettings, Settings, load_settings
+from trainer.config import (
+    ConfigError,
+    EngineSettings,
+    MigrationSettings,
+    Settings,
+    load_settings,
+)
 
 
 def test_load_settings_reads_toml_and_resolves_database_path(
@@ -20,6 +26,7 @@ def test_load_settings_reads_toml_and_resolves_database_path(
         lichess_username="test-player",
         database_path=tmp_path / "data" / "trainer.db",
         engine=EngineSettings(),
+        migration=MigrationSettings(),
     )
 
 
@@ -63,6 +70,22 @@ def test_load_settings_keeps_stockfish_on_path_when_no_engine_path_is_configured
     assert settings.engine.hash_mb == 128
 
 
+def test_load_settings_reads_and_resolves_the_flyway_path(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[lichess]\nusername = "test-player"\n\n'
+        '[database]\npath = "data/trainer.db"\n\n'
+        '[migration]\nflyway_path = "tools/flyway"\n',
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.migration == MigrationSettings(
+        executable=tmp_path / "tools" / "flyway"
+    )
+
+
 @pytest.mark.parametrize(
     ("engine_section", "expected_message"),
     [
@@ -71,6 +94,7 @@ def test_load_settings_keeps_stockfish_on_path_when_no_engine_path_is_configured
         ("[engine]\ndepth = true\n", "Set [engine] depth to a positive integer"),
         ("[engine]\nthreads = -2\n", "Set [engine] threads to a positive integer"),
         ('[engine]\nhash = "big"\n', "Set [engine] hash to a positive integer"),
+        ('[migration]\nflyway_path = 42\n', "Set [migration] flyway_path"),
     ],
 )
 def test_load_settings_rejects_invalid_engine_configuration(

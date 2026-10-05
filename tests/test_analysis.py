@@ -1,5 +1,5 @@
+from collections.abc import Callable
 import json
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -9,13 +9,10 @@ from trainer.config import Settings
 
 
 def test_analysis_shows_initial_board_and_player_critical_moment(
-    tmp_path: Path,
+    migrated_settings: Callable[[str], Settings],
     lichess_mock: LichessMock,
 ) -> None:
-    settings = Settings(
-        lichess_username="Lance5500",
-        database_path=tmp_path / "trainer.db",
-    )
+    settings = migrated_settings("Lance5500")
     app = create_app(
         settings,
         lichess_transport=lichess_mock.games_for("Lance5500"),
@@ -56,7 +53,7 @@ def test_analysis_shows_initial_board_and_player_critical_moment(
 
 
 def test_analysis_classifies_from_evaluations_not_lichess_judgment(
-    tmp_path: Path,
+    migrated_settings: Callable[[str], Settings],
     lichess_mock: LichessMock,
 ) -> None:
     document = json.loads(lichess_mock.fixture)
@@ -66,10 +63,7 @@ def test_analysis_classifies_from_evaluations_not_lichess_judgment(
     document["analysis"][26]["judgment"]["name"] = "Blunder"
 
     app = create_app(
-        Settings(
-            lichess_username="Lance5500",
-            database_path=tmp_path / "trainer.db",
-        ),
+        migrated_settings("Lance5500"),
         lichess_transport=lichess_mock.games_for(
             "Lance5500",
             ndjson=json.dumps(document),

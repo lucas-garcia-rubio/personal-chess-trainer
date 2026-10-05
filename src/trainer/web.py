@@ -38,9 +38,8 @@ def create_web_app(
         sync_games()
         return RedirectResponse("/", status_code=303)
 
-    @app.get("/analyses/{source_id}", response_class=HTMLResponse)
-    def analysis(request: Request, source_id: str) -> Response:
-        stored_analysis = storage.get_analysis(source_id)
+    def render_analysis(request: Request, origin: str, origin_id: str) -> Response:
+        stored_analysis = storage.get_analysis(origin, origin_id)
         if stored_analysis is None:
             raise HTTPException(status_code=404, detail="Analysis not found")
         return _templates.TemplateResponse(
@@ -48,5 +47,13 @@ def create_web_app(
             "analysis.html",
             {"analysis": stored_analysis},
         )
+
+    @app.get("/analyses/{origin}/{origin_id}", response_class=HTMLResponse)
+    def analysis(request: Request, origin: str, origin_id: str) -> Response:
+        return render_analysis(request, origin, origin_id)
+
+    @app.get("/analyses/{source_id}", response_class=HTMLResponse)
+    def legacy_lichess_analysis(request: Request, source_id: str) -> Response:
+        return render_analysis(request, "lichess", source_id)
 
     return app

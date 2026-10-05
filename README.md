@@ -4,7 +4,8 @@ Aplicativo web local para revisar as partidas de xadrez do Player.
 
 ## Desenvolvimento
 
-O projeto requer Python 3.12 ou posterior e usa uma virtual environment local:
+O projeto requer Python 3.12 ou posterior, Flyway `13.9.0` com suporte a SQLite
+e usa uma virtual environment local:
 
 ```bash
 python -m venv .venv
@@ -20,10 +21,16 @@ username = "seu-username"
 
 [database]
 path = "data/trainer.db"
+
+# Opcional quando `flyway` ja esta no PATH.
+[migration]
+flyway_path = "/caminho/para/flyway"
 ```
 
-Caminhos relativos do banco são resolvidos a partir da pasta que contém o
-arquivo de configuração. Inicie a aplicação com:
+Caminhos relativos do banco e do executável Flyway são resolvidos a partir da
+pasta que contém o arquivo de configuração. Antes de abrir o banco ou iniciar o
+servidor, `trainer serve` exige exatamente Flyway `13.9.0`, valida os checksums e
+aplica as migrations em `src/trainer/migrations`. Inicie a aplicação com:
 
 ```bash
 trainer serve

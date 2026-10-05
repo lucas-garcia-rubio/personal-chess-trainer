@@ -14,10 +14,18 @@ class EngineSettings:
 
 
 @dataclass(frozen=True)
+class MigrationSettings:
+    """How the supported Flyway CLI is resolved."""
+
+    executable: Path | None = None
+
+
+@dataclass(frozen=True)
 class Settings:
     lichess_username: str
     database_path: Path
     engine: EngineSettings = EngineSettings()
+    migration: MigrationSettings = MigrationSettings()
 
 
 class ConfigError(ValueError):
@@ -56,6 +64,7 @@ def load_settings(path: Path) -> Settings:
         lichess_username=username.strip(),
         database_path=database_path,
         engine=_load_engine_settings(config, path),
+        migration=_load_migration_settings(config, path),
     )
 
 
@@ -89,3 +98,21 @@ def _engine_option(engine: dict[str, object], key: str, default: int) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         raise ConfigError(f"Set [engine] {key} to a positive integer.")
     return value
+
+
+def _load_migration_settings(
+    config: dict[str, object], config_path: Path
+) -> MigrationSettings:
+    migration = config.get("migration")
+    if not isinstance(migration, dict):
+        return MigrationSettings()
+
+    configured_executable = migration.get("flyway_path")
+    if configured_executable is None:
+        return MigrationSettings()
+    if not isinstance(configured_executable, str) or not configured_executable.strip():
+        raise ConfigError("Set [migration] flyway_path to the Flyway executable path.")
+    executable = Path(configured_executable.strip()).expanduser()
+    if not executable.is_absolute():
+        executable = config_path.parent / executable
+    return MigrationSettings(executable=executable)

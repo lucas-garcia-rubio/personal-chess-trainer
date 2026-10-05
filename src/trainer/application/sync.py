@@ -2,7 +2,7 @@ import json
 from typing import cast
 
 from trainer.application.ports import GameSource, LocalStorage
-from trainer.domain import GameDocument, derive_analysis
+from trainer.domain import GameDocument, derive_analysis, derive_lichess_metadata
 
 
 class SyncGames:
@@ -20,4 +20,5 @@ class SyncGames:
         for raw_document in self._game_source.fetch_games():
             game = cast(GameDocument, json.loads(raw_document))
             analysis = derive_analysis(game, self._player_username)
-            self._storage.save_game(raw_document, analysis)
+            metadata = derive_lichess_metadata(game)
+            self._storage.save_game(raw_document, metadata, analysis)

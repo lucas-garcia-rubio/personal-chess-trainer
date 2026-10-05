@@ -1,6 +1,7 @@
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import math
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired, TypeAlias, TypedDict
 
 import chess
 
@@ -12,6 +13,8 @@ class UserDocument(TypedDict):
 
 class PlayerDocument(TypedDict):
     user: UserDocument
+    rating: NotRequired[int]
+    ratingDiff: NotRequired[int]
 
 
 class PlayersDocument(TypedDict):
@@ -40,6 +43,20 @@ class GameDocument(TypedDict):
     analysis: list[EvaluationDocument]
     clock: ClockDocument
     winner: NotRequired[str]
+    source: NotRequired[str]
+    variant: NotRequired[str]
+    opening: NotRequired["OpeningDocument"]
+    arenaTour: NotRequired["ArenaDocument"]
+
+
+class OpeningDocument(TypedDict):
+    eco: str
+    name: str
+
+
+class ArenaDocument(TypedDict):
+    id: str
+    name: str
 
 
 ScoreKind = Literal["cp", "mate"]
@@ -72,11 +89,10 @@ class PositionEvaluation:
 class EvaluatorProvenance:
     """Who evaluated a run and with which effective parameters."""
 
+    source_kind: str
     name: str
     version: str | None
-    depth: int
-    threads: int
-    hash_mb: int
+    parameters: dict[str, int | str | float | bool]
 
 
 @dataclass(frozen=True)
@@ -107,6 +123,7 @@ class Analysis:
     speed: str
     time_control: str
     player_color: str
+    evaluator: EvaluatorProvenance
     critical_moments: list[CriticalMoment]
 
     def to_document(self) -> dict[str, object]:
@@ -115,11 +132,29 @@ class Analysis:
 
 @dataclass(frozen=True)
 class GameSummary:
-    source_id: str
+    origin: str
+    origin_id: str
     opponent: str
     result: str
     speed: str
     critical_count: int
+
+
+HeaderValue: TypeAlias = str
+
+
+@dataclass(frozen=True)
+class GameMetadata:
+    origin: str
+    origin_id: str
+    played_at: int
+    white: str
+    black: str
+    result: str
+    time_control: str
+    eco: str | None
+    opening: str | None
+    headers: dict[str, HeaderValue]
 
 
 def _winning_chances(centipawns: int) -> float:
@@ -237,5 +272,79 @@ def derive_analysis(game: GameDocument, player_username: str) -> Analysis:
         speed=game["speed"],
         time_control=f'{clock["initial"]}+{clock["increment"]}',
         player_color=player_color,
+        evaluator=EvaluatorProvenance(
+            source_kind="lichess-server",
+            name="Lichess",
+            version=None,
+            parameters={},
+        ),
         critical_moments=moments,
     )
+
+
+def derive_lichess_metadata(game: GameDocument) -> GameMetadata:
+    created_at = game["createdAt"]
+    played = datetime.fromtimestamp(created_at / 1000, tz=timezone.utc)
+    white = game["players"]["white"]
+    black = game["players"]["black"]
+    result = _game_result(game)
+    clock = game["clock"]
+    time_control = f'{clock["initial"]}+{clock["increment"]}'
+    opening = game.get("opening")
+    game_id = game["id"]
+    headers = {
+        "Site": f"https://lichess.org/{game_id}",
+        "Date": played.strftime("%Y.%m.%d"),
+        "White": white["user"]["name"],
+        "Black": black["user"]["name"],
+        "Result": result,
+        "GameId": game_id,
+        "UTCDate": played.strftime("%Y.%m.%d"),
+        "UTCTime": played.strftime("%H:%M:%S"),
+        "Variant": game.get("variant", "standard"),
+        "TimeControl": time_control,
+        "Termination": game["status"],
+    }
+    arena = game.get("arenaTour")
+    source = game.get("source")
+    if arena is not None:
+        headers["Event"] = arena["name"]
+    elif source is not None:
+        headers["Event"] = source
+    _add_player_headers(headers, "White", white)
+    _add_player_headers(headers, "Black", black)
+    if opening is not None:
+        headers["ECO"] = opening["eco"]
+        headers["Opening"] = opening["name"]
+    return GameMetadata(
+        origin="lichess",
+        origin_id=game_id,
+        played_at=created_at,
+        white=white["user"]["name"],
+        black=black["user"]["name"],
+        result=result,
+        time_control=time_control,
+        eco=None if opening is None else opening["eco"],
+        opening=None if opening is None else opening["name"],
+        headers=headers,
+    )
+
+
+def _game_result(game: GameDocument) -> str:
+    winner = game.get("winner")
+    if winner == "white":
+        return "1-0"
+    if winner == "black":
+        return "0-1"
+    return "1/2-1/2"
+
+
+def _add_player_headers(
+    headers: dict[str, HeaderValue], side: str, player: PlayerDocument
+) -> None:
+    rating = player.get("rating")
+    if rating is not None:
+        headers[f"{side}Elo"] = str(rating)
+    rating_diff = player.get("ratingDiff")
+    if rating_diff is not None:
+        headers[f"{side}RatingDiff"] = f"{rating_diff:+d}"

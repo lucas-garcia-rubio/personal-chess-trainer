@@ -100,11 +100,10 @@ def test_evaluates_positions_through_a_single_process_per_operation(
         ),
     ]
     assert run.provenance == EvaluatorProvenance(
+        source_kind="local-engine",
         name="StubEngine 2.3",
         version="2.3",
-        depth=15,
-        threads=1,
-        hash_mb=128,
+        parameters={"depth": 15, "threads": 1, "hash_mb": 128},
     )
     assert scripted_engine.commands() == [
         "start",
@@ -133,9 +132,11 @@ def test_applies_configured_depth_threads_and_hash(
 
     run = evaluator.evaluate_positions([START_FEN])
 
-    assert run.provenance.depth == 3
-    assert run.provenance.threads == 4
-    assert run.provenance.hash_mb == 256
+    assert run.provenance.parameters == {
+        "depth": 3,
+        "threads": 4,
+        "hash_mb": 256,
+    }
     commands = scripted_engine.commands()
     assert "setoption name Threads value 4" in commands
     assert "setoption name Hash value 256" in commands

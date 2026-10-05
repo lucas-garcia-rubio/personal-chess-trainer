@@ -5,6 +5,7 @@ import sqlite3
 
 import uvicorn
 
+from trainer.adapters.flyway import FlywayError, FlywayMigrator
 from trainer.bootstrap import create_app
 from trainer.config import ConfigError, load_settings
 
@@ -34,7 +35,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error(str(error))
 
     try:
+        FlywayMigrator(settings.migration).migrate(settings.database_path)
         app = create_app(settings)
+    except FlywayError as error:
+        parser.error(str(error))
     except (OSError, sqlite3.Error) as error:
         parser.error(
             f"Could not open SQLite database at {settings.database_path}: {error}. "

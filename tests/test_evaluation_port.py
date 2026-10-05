@@ -36,7 +36,12 @@ class DeterministicEvaluator:
 def test_the_evaluation_port_accepts_deterministic_evaluators() -> None:
     evaluator: PositionEvaluator = DeterministicEvaluator(
         EvaluationScore(kind="cp", value=15),
-        EvaluatorProvenance(name="deterministic", version=None, depth=1, threads=1, hash_mb=1),
+        EvaluatorProvenance(
+            source_kind="test-double",
+            name="deterministic",
+            version=None,
+            parameters={"depth": 1, "threads": 1, "hash_mb": 1},
+        ),
     )
 
     run = evaluator.evaluate_positions([STARTING_FEN])
