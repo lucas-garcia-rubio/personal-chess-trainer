@@ -33,6 +33,13 @@ def test_analysis_shows_initial_board_and_player_critical_moment(
         response = client.get("/analyses/q7ZvsdUF")
 
     assert response.status_code == 200
+    assert "@lichess-org/chessground@10.4.2/assets/chessground.base.css" in response.text
+    assert "@lichess-org/chessground@10.4.2/assets/chessground.brown.css" in response.text
+    assert "@lichess-org/chessground@10.4.2/assets/chessground.cburnett.css" in response.text
+    assert "@lichess-org/chessground@10.4.2/+esm" in response.text
+    assert "Chessground(element" in response.text
+    assert "coordinates: false" in response.text
+    assert "<span>" not in response.text
     assert (
         'data-fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"'
         in response.text

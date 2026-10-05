@@ -1,14 +1,15 @@
 <!doctype html>
 <html lang="en">
   {% macro board(fen, label) -%}
-    <div class="board" aria-label="{{ label }}" data-fen="{{ fen }}">
-      {% for piece in fen|board_pieces %}<span>{{ piece }}</span>{% endfor %}
-    </div>
+    <div class="board" aria-label="{{ label }}" data-fen="{{ fen }}"></div>
   {%- endmacro %}
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Analysis · {{ analysis.opponent }}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@lichess-org/chessground@10.4.2/assets/chessground.base.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@lichess-org/chessground@10.4.2/assets/chessground.brown.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@lichess-org/chessground@10.4.2/assets/chessground.cburnett.css">
     <style>
       :root {
         color-scheme: light dark;
@@ -26,34 +27,23 @@
       a { color: #dcb86b; }
       .layout {
         display: grid;
-        grid-template-columns: minmax(18rem, 32rem) 1fr;
+        grid-template-columns: minmax(18rem, 32rem) minmax(0, 1fr);
         gap: 2rem;
         align-items: start;
       }
       .board {
-        display: grid;
-        grid-template-columns: repeat(8, 1fr);
+        width: 100%;
+        max-width: 32rem;
         aspect-ratio: 1;
-        border: 0.5rem solid #302b24;
-      }
-      .board span {
-        display: grid;
-        place-items: center;
-        font-size: clamp(1.6rem, 6vw, 3.5rem);
-        color: #16130f;
-        background: #e5cf9d;
-      }
-      .board span:nth-child(16n + 2), .board span:nth-child(16n + 4),
-      .board span:nth-child(16n + 6), .board span:nth-child(16n + 8),
-      .board span:nth-child(16n + 9), .board span:nth-child(16n + 11),
-      .board span:nth-child(16n + 13), .board span:nth-child(16n + 15) {
-        background: #8f6746;
       }
       .moment {
+        box-sizing: border-box;
+        min-width: 0;
         padding: 1rem;
         border-left: 0.3rem solid #d66a4a;
         background: #24201b;
       }
+      .layout > section { min-width: 0; }
       @media (max-width: 48rem) {
         .layout { grid-template-columns: 1fr; }
       }
@@ -82,5 +72,16 @@
         </section>
       </div>
     </main>
+    <script type="module">
+      import { Chessground } from "https://cdn.jsdelivr.net/npm/@lichess-org/chessground@10.4.2/+esm";
+
+      for (const element of document.querySelectorAll(".board")) {
+        Chessground(element, {
+          fen: element.dataset.fen,
+          coordinates: false,
+          movable: { color: "both", free: true },
+        });
+      }
+    </script>
   </body>
 </html>

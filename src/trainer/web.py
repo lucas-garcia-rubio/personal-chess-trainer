@@ -2,7 +2,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import chess
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -11,19 +10,6 @@ from trainer.application.ports import GameSource, LocalStorage
 from trainer.application.sync import SyncGames
 
 _templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
-
-
-def _board_pieces(fen: str) -> tuple[str, ...]:
-    board = chess.Board(fen)
-    return tuple(
-        piece.unicode_symbol() if (piece := board.piece_at(square)) else ""
-        for rank in range(7, -1, -1)
-        for file in range(8)
-        for square in [chess.square(file, rank)]
-    )
-
-
-_templates.env.filters["board_pieces"] = _board_pieces
 
 
 def create_web_app(
