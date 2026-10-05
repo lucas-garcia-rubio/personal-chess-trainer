@@ -1,12 +1,17 @@
+from collections.abc import Sequence
 from typing import Protocol
 
-from trainer.domain import Analysis, GameSummary
+from trainer.domain import Analysis, EvaluationRun, GameSummary
 
 
 class GameSource(Protocol):
     def fetch_games(self) -> list[str]: ...
 
     def close(self) -> None: ...
+
+
+class PositionEvaluator(Protocol):
+    def evaluate_positions(self, positions: Sequence[str]) -> EvaluationRun: ...
 
 
 class LocalStorage(Protocol):

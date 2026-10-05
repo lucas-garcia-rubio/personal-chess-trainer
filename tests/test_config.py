@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from trainer.config import ConfigError, Settings, load_settings
+from trainer.config import ConfigError, EngineSettings, Settings, load_settings
 
 
 def test_load_settings_reads_toml_and_resolves_database_path(
@@ -19,7 +19,76 @@ def test_load_settings_reads_toml_and_resolves_database_path(
     assert settings == Settings(
         lichess_username="test-player",
         database_path=tmp_path / "data" / "trainer.db",
+        engine=EngineSettings(),
     )
+
+
+def test_load_settings_reads_engine_configuration_and_resolves_relative_path(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[lichess]\nusername = "test-player"\n\n'
+        '[database]\npath = "data/trainer.db"\n\n'
+        '[engine]\npath = "engines/stockfish"\ndepth = 20\nthreads = 4\nhash = 256\n',
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.engine == EngineSettings(
+        executable=tmp_path / "engines" / "stockfish",
+        depth=20,
+        threads=4,
+        hash_mb=256,
+    )
+
+
+def test_load_settings_keeps_stockfish_on_path_when_no_engine_path_is_configured(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[lichess]\nusername = "test-player"\n\n'
+        '[database]\npath = "data/trainer.db"\n\n'
+        '[engine]\ndepth = 18\n',
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.engine.executable is None
+    assert settings.engine.depth == 18
+    assert settings.engine.threads == 1
+    assert settings.engine.hash_mb == 128
+
+
+@pytest.mark.parametrize(
+    ("engine_section", "expected_message"),
+    [
+        ("[engine]\npath = 42\n", "Set [engine] path"),
+        ("[engine]\ndepth = 0\n", "Set [engine] depth to a positive integer"),
+        ("[engine]\ndepth = true\n", "Set [engine] depth to a positive integer"),
+        ("[engine]\nthreads = -2\n", "Set [engine] threads to a positive integer"),
+        ('[engine]\nhash = "big"\n', "Set [engine] hash to a positive integer"),
+    ],
+)
+def test_load_settings_rejects_invalid_engine_configuration(
+    tmp_path: Path,
+    engine_section: str,
+    expected_message: str,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[lichess]\nusername = "test-player"\n\n'
+        '[database]\npath = "data/trainer.db"\n\n' + engine_section,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError) as error:
+        load_settings(config_path)
+
+    assert expected_message in str(error.value)
 
 
 @pytest.mark.parametrize(

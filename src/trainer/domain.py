@@ -1,6 +1,6 @@
 from dataclasses import asdict, dataclass
 import math
-from typing import NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 import chess
 
@@ -40,6 +40,51 @@ class GameDocument(TypedDict):
     analysis: list[EvaluationDocument]
     clock: ClockDocument
     winner: NotRequired[str]
+
+
+ScoreKind = Literal["cp", "mate"]
+
+
+@dataclass(frozen=True)
+class EvaluationScore:
+    """A position score from White's point of view: centipawns or moves to mate.
+
+    Positive values favour White; ``mate`` values count moves until the mate —
+    as UCI engines report them, not plies — and are negative when White is the
+    side being mated.
+    """
+
+    kind: ScoreKind
+    value: int
+
+
+@dataclass(frozen=True)
+class PositionEvaluation:
+    """The evaluation of one position, with the best move in UCI and the line behind it."""
+
+    fen: str
+    score: EvaluationScore
+    best_move: str | None
+    principal_variation: list[str]
+
+
+@dataclass(frozen=True)
+class EvaluatorProvenance:
+    """Who evaluated a run and with which effective parameters."""
+
+    name: str
+    version: str | None
+    depth: int
+    threads: int
+    hash_mb: int
+
+
+@dataclass(frozen=True)
+class EvaluationRun:
+    """The result of one evaluation operation over a sequence of positions."""
+
+    provenance: EvaluatorProvenance
+    evaluations: list[PositionEvaluation]
 
 
 @dataclass(frozen=True)
