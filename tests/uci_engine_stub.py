@@ -15,7 +15,9 @@ Scenario shape::
     }
 
 ``exit_on`` makes the stub exit right after receiving a command starting with
-that prefix, to simulate an engine that dies mid-conversation.
+that prefix, to simulate an engine that dies mid-conversation. ``blank_lines``
+makes the stub emit empty lines in its ``uci`` reply, as Stockfish 19 does
+between the ``id`` lines and ``uciok``.
 """
 
 import json
@@ -35,6 +37,7 @@ def main() -> None:
     }
     exit_prefix = scenario.get("exit_on")
     exit_on = str(exit_prefix) if exit_prefix is not None else None
+    blank_lines = bool(scenario.get("blank_lines", False))
 
     with Path(os.environ["UCI_ENGINE_LOG"]).open("a", encoding="utf-8") as log:
         log.write("start\n")
@@ -51,6 +54,8 @@ def main() -> None:
             if command == "uci":
                 print(f"id name {name}")
                 print("id author adapter test double")
+                if blank_lines:
+                    print()
                 print("uciok", flush=True)
             elif command == "isready":
                 print("readyok", flush=True)

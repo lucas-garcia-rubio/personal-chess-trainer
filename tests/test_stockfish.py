@@ -245,6 +245,18 @@ def test_missing_configured_executable_raises_an_actionable_error(
     assert "[engine] path" in str(error.value)
 
 
+def test_survives_blank_lines_in_the_uci_reply(
+    stub_engine: StubEngine,
+) -> None:
+    stub_engine.script({**_default_scenario(), "name": "Stockfish 19", "blank_lines": True})
+    evaluator = StockfishEvaluator(EngineSettings(executable=stub_engine.executable))
+
+    run = evaluator.evaluate_positions([START_FEN])
+
+    assert run.evaluations[0].best_move == "e2e4"
+    assert run.provenance.name == "Stockfish 19"
+
+
 def test_reports_an_engine_that_exits_during_the_handshake(
     stub_engine: StubEngine,
 ) -> None:

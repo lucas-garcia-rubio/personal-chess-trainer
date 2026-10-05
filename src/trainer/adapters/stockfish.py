@@ -214,7 +214,11 @@ class _UciSession:
 
 def _drain(stdout: IO[str], lines: queue.Queue[str]) -> None:
     for line in stdout:
-        lines.put(line.rstrip("\n"))
+        stripped = line.rstrip("\n")
+        # Blank lines are protocol noise — Stockfish 19 emits one in its uci
+        # reply — so the queue reserves "" exclusively for end-of-stream.
+        if stripped:
+            lines.put(stripped)
     lines.put(_EOF)
 
 
