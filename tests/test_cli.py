@@ -84,7 +84,7 @@ def test_serve_starts_the_configured_application(tmp_path: Path) -> None:
     assert "Personal Chess Trainer" in body
     assert (tmp_path / "trainer.db").is_file()
     with sqlite3.connect(tmp_path / "trainer.db") as database:
-        assert database.execute("PRAGMA user_version").fetchone() == (3,)
+        assert database.execute("PRAGMA user_version").fetchone() == (4,)
 
 
 def test_serve_refuses_to_start_when_flyway_validation_fails(tmp_path: Path) -> None:

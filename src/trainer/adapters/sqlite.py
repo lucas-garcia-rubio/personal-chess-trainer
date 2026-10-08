@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 from typing import cast
 
+from trainer.application.ports import GameIdentityConflict
 from trainer.domain import (
     Analysis,
     CriticalMoment,
@@ -25,31 +26,15 @@ class SQLiteStorage:
         self, raw_document: str, metadata: GameMetadata, analysis: Analysis
     ) -> None:
         with self._connection:
-            self._connection.execute(
+            inserted = self._connection.execute(
                 """
                 INSERT INTO games (
                     source_id, raw_document, analysis_document, created_at,
                     opponent, result, speed, critical_count, origin, origin_id,
                     played_at, white, black, game_result, time_control, eco,
-                    opening, headers_document
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(origin, origin_id) DO UPDATE SET
-                    source_id = excluded.source_id,
-                    raw_document = excluded.raw_document,
-                    analysis_document = excluded.analysis_document,
-                    created_at = excluded.created_at,
-                    opponent = excluded.opponent,
-                    result = excluded.result,
-                    speed = excluded.speed,
-                    critical_count = excluded.critical_count,
-                    played_at = excluded.played_at,
-                    white = excluded.white,
-                    black = excluded.black,
-                    game_result = excluded.game_result,
-                    time_control = excluded.time_control,
-                    eco = excluded.eco,
-                    opening = excluded.opening,
-                    headers_document = excluded.headers_document
+                    opening, headers_document, canonical_document
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(origin, origin_id) DO NOTHING
                 """,
                 (
                     analysis.source_id,
@@ -70,8 +55,21 @@ class SQLiteStorage:
                     metadata.eco,
                     metadata.opening,
                     json.dumps(metadata.headers),
+                    metadata.canonical_document,
                 ),
             )
+            if inserted.rowcount == 1:
+                return
+            stored = self.get_canonical_document(metadata.origin, metadata.origin_id)
+            if stored != metadata.canonical_document:
+                raise GameIdentityConflict(metadata.origin, metadata.origin_id)
+
+    def get_canonical_document(self, origin: str, origin_id: str) -> str | None:
+        row = self._connection.execute(
+            "SELECT canonical_document FROM games WHERE origin = ? AND origin_id = ?",
+            (origin, origin_id),
+        ).fetchone()
+        return None if row is None else cast(str | None, row[0])
 
     def list_games(self) -> list[GameSummary]:
         rows = self._connection.execute(

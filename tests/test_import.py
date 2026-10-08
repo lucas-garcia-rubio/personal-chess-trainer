@@ -1,7 +1,10 @@
 from collections.abc import Callable, Sequence
+import io
 import json
 import sqlite3
 
+import chess
+import chess.pgn
 import pytest
 from fastapi.testclient import TestClient
 from markupsafe import escape
@@ -36,9 +39,11 @@ PGN = """[Event "Local training game"]
 class DeterministicEvaluator:
     def __init__(self, *, fail_on_call: bool = False) -> None:
         self.positions: list[str] = []
+        self.call_count = 0
         self.fail_on_call = fail_on_call
 
     def evaluate_positions(self, positions: Sequence[str]) -> EvaluationRun:
+        self.call_count += 1
         if self.fail_on_call:
             raise AssertionError("persisted Analysis must reopen without evaluation")
         self.positions = list(positions)
@@ -154,7 +159,10 @@ def test_import_pgn_redirects_to_persisted_analysis_and_reopens_offline(
     assert '<textarea name="pgn"' in form.text
     assert imported.status_code == 303
     analysis_path = imported.headers["location"]
-    assert analysis_path.startswith("/analyses/content-sha256/")
+    assert analysis_path == (
+        "/analyses/content-sha256/"
+        "63015e68308b28ab4fa91b224fb234539bb59e89223eb9830db9f418c5ba82bb"
+    )
     assert len(evaluator.positions) == 4
     assert len(set(evaluator.positions)) == 4
 
@@ -224,6 +232,174 @@ def test_import_ignores_whitespace_around_the_pgn_document(
             "SELECT raw_document FROM games WHERE origin = 'content-sha256'"
         ).fetchall()
     assert rows == [(PGN.strip(),)]
+
+
+def test_repeated_import_with_cosmetic_pgn_differences_reuses_analysis(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    cosmetic_variant = PGN.replace(
+        "1. e4 e5 2. Nf3 1-0",
+        "1. e4 {a comment} (1. d4 d5)  e5\n2. Nf3 $1 1-0",
+    ).replace('[Event "Local training game"]\n', '[Event "Renamed event"]\n')
+    settings = migrated_settings("test-player")
+    evaluator = DeterministicEvaluator()
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "Import must not call Lichess"
+        ),
+        position_evaluator=evaluator,
+    )
+
+    with TestClient(app) as client:
+        original = client.post(
+            "/imports", data={"pgn": PGN}, follow_redirects=False
+        )
+        duplicate = client.post(
+            "/imports", data={"pgn": cosmetic_variant}, follow_redirects=False
+        )
+
+    assert original.status_code == 303
+    assert duplicate.status_code == 303
+    assert duplicate.headers["location"] == original.headers["location"]
+    assert evaluator.call_count == 1
+    with sqlite3.connect(settings.database_path) as database:
+        stored = database.execute(
+            "SELECT raw_document, analysis_document FROM games"
+        ).fetchall()
+    assert len(stored) == 1
+    assert stored[0][0] == PGN.strip()
+
+
+def test_content_identity_includes_the_initial_position(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    setup_pgn = PGN.replace(
+        '[TimeControl "600+0"]',
+        '[TimeControl "600+0"]\n[SetUp "1"]\n'
+        '[FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 4 7"]',
+    )
+    settings = migrated_settings("test-player")
+    evaluator = DeterministicEvaluator()
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "Import must not call Lichess"
+        ),
+        position_evaluator=evaluator,
+    )
+
+    with TestClient(app) as client:
+        standard = client.post(
+            "/imports", data={"pgn": PGN}, follow_redirects=False
+        )
+        setup = client.post(
+            "/imports", data={"pgn": setup_pgn}, follow_redirects=False
+        )
+
+    assert standard.status_code == 303
+    assert setup.status_code == 303
+    assert standard.headers["location"] != setup.headers["location"]
+    assert evaluator.call_count == 2
+    with sqlite3.connect(settings.database_path) as database:
+        assert database.execute("SELECT COUNT(*) FROM games").fetchone() == (2,)
+
+
+def _lichess_pgn(raw_document: str, *, black: str = "TryingHard87") -> str:
+    document = json.loads(raw_document)
+    game = chess.pgn.Game()
+    game.headers.update(
+        {
+            "Event": "Imported Lichess Game",
+            "Site": f'https://lichess.org/{document["id"]}',
+            "Date": "2017.12.28",
+            "Round": "?",
+            "White": document["players"]["white"]["user"]["name"],
+            "Black": black,
+            "Result": "1/2-1/2",
+            "GameId": document["id"],
+        }
+    )
+    board = game.board()
+    node: chess.pgn.GameNode = game
+    for san in document["moves"].split():
+        move = board.parse_san(san)
+        node = node.add_variation(move)
+        board.push(move)
+    return game.accept(
+        chess.pgn.StringExporter(headers=True, variations=True, comments=True)
+    )
+
+
+def test_lichess_pgn_reuses_the_analysis_created_by_sync(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    settings = migrated_settings("Lance5500")
+    sync_app = create_app(
+        settings,
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+        position_evaluator=DeterministicEvaluator(fail_on_call=True),
+    )
+    with TestClient(sync_app) as client:
+        synced = client.post("/sync", follow_redirects=False)
+    assert synced.status_code == 303
+
+    import_app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "Import must not call Lichess"
+        ),
+        position_evaluator=DeterministicEvaluator(fail_on_call=True),
+    )
+    with TestClient(import_app) as client:
+        imported = client.post(
+            "/imports",
+            data={"pgn": _lichess_pgn(lichess_mock.fixture)},
+            follow_redirects=False,
+        )
+
+    assert imported.status_code == 303
+    assert imported.headers["location"] == "/analyses/lichess/q7ZvsdUF"
+    with sqlite3.connect(settings.database_path) as database:
+        assert database.execute("SELECT COUNT(*) FROM games").fetchone() == (1,)
+
+
+def test_import_rejects_content_conflicting_with_an_existing_lichess_identity(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    settings = migrated_settings("Lance5500")
+    sync_app = create_app(
+        settings,
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+        position_evaluator=DeterministicEvaluator(fail_on_call=True),
+    )
+    with TestClient(sync_app) as client:
+        client.post("/sync")
+
+    conflicting_pgn = _lichess_pgn(lichess_mock.fixture, black="DifferentOpponent")
+    import_app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "Import must not call Lichess"
+        ),
+        position_evaluator=DeterministicEvaluator(fail_on_call=True),
+    )
+    with TestClient(import_app) as client:
+        response = client.post("/imports", data={"pgn": conflicting_pgn})
+
+    assert response.status_code == 422
+    assert "conflicts with the existing Lichess Game q7ZvsdUF" in response.text
+    with sqlite3.connect(settings.database_path) as database:
+        stored = database.execute(
+            "SELECT black, raw_document, analysis_document FROM games"
+        ).fetchall()
+    assert len(stored) == 1
+    assert stored[0][0] == "TryingHard87"
+    assert stored[0][1] == lichess_mock.fixture.strip()
 
 
 def assert_rejected(

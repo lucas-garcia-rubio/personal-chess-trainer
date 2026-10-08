@@ -203,8 +203,8 @@ def test_legacy_migration_backfills_metadata_without_changing_raw_or_analysis_hi
         stored = database.execute(
             """
             SELECT raw_document, analysis_document, origin, origin_id, played_at,
-                   white, black, game_result, time_control, eco, opening,
-                   headers_document
+                    white, black, game_result, time_control, eco, opening,
+                    headers_document, canonical_document
             FROM games
             """
         ).fetchone()
@@ -235,6 +235,13 @@ def test_legacy_migration_backfills_metadata_without_changing_raw_or_analysis_hi
     assert headers["BlackElo"] == "2498"
     assert headers["WhiteRatingDiff"] == "+4"
     assert headers["BlackRatingDiff"] == "-4"
+    assert json.loads(stored[12]) == [
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        json.loads(raw_document)["moves"],
+        "Lance5500",
+        "TryingHard87",
+        "1/2-1/2",
+    ]
 
     storage = SQLiteStorage(database_path)
     try:
@@ -266,11 +273,11 @@ def test_supported_flyway_distribution_migrates_empty_and_legacy_databases(
 
     for database_path in (empty_database, legacy_database):
         with sqlite3.connect(database_path) as database:
-            assert database.execute("PRAGMA user_version").fetchone() == (3,)
+            assert database.execute("PRAGMA user_version").fetchone() == (4,)
             assert database.execute(
                 "SELECT version FROM flyway_schema_history "
                 "WHERE success = 1 ORDER BY installed_rank"
-            ).fetchall() == [("1",), ("2",)]
+            ).fetchall() == [("1",), ("2",), ("3",)]
             primary_key = [
                 row[1] for row in database.execute("PRAGMA table_info(games)") if row[5]
             ]

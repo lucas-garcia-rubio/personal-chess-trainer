@@ -33,7 +33,7 @@ def test_home_is_served_with_a_real_local_database(
     assert "Personal Chess Trainer" in response.text
     assert settings.database_path.is_file()
     with sqlite3.connect(settings.database_path) as database:
-        assert database.execute("PRAGMA user_version").fetchone() == (3,)
+        assert database.execute("PRAGMA user_version").fetchone() == (4,)
 
 
 def test_home_orders_games_by_their_operational_instant(
@@ -76,6 +76,7 @@ def _stored_game(
             eco=None,
             opening=None,
             headers={"Result": "1-0"},
+            canonical_document=f"lichess:{origin_id}",
         ),
         Analysis(
             source_id=origin_id,

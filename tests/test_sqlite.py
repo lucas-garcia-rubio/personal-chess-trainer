@@ -50,6 +50,7 @@ def _metadata(origin: str, origin_id: str) -> GameMetadata:
             "Result": "1-0",
             "X-Provider-Tag": "preserved verbatim",
         },
+        canonical_document=f"{origin}:{origin_id}",
     )
 
 

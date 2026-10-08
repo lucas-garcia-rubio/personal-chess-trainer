@@ -1,7 +1,7 @@
 import json
 from typing import cast
 
-from trainer.application.ports import GameSource, LocalStorage
+from trainer.application.ports import GameIdentityConflict, GameSource, LocalStorage
 from trainer.domain import GameDocument, derive_analysis, derive_lichess_metadata
 
 
@@ -20,6 +20,13 @@ class SyncGames:
         for raw_document in self._game_source.fetch_games():
             game = cast(GameDocument, json.loads(raw_document))
             metadata = derive_lichess_metadata(game)
+            existing = self._storage.get_canonical_document(
+                metadata.origin, metadata.origin_id
+            )
+            if existing is not None:
+                if existing != metadata.canonical_document:
+                    raise GameIdentityConflict(metadata.origin, metadata.origin_id)
+                continue
             analysis = derive_analysis(
                 game, self._player_username, played_at=metadata.played_at
             )

@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import json
 import math
 from typing import Literal, NotRequired, TypeAlias, TypedDict
 
@@ -157,6 +158,27 @@ class GameMetadata:
     eco: str | None
     opening: str | None
     headers: dict[str, HeaderValue]
+    canonical_document: str
+
+
+def canonical_game_document(
+    *,
+    initial_fen: str,
+    moves: list[chess.Move],
+    white: str,
+    black: str,
+    result: str,
+) -> str:
+    board = chess.Board(initial_fen)
+    canonical_moves: list[str] = []
+    for move in moves:
+        canonical_moves.append(board.san(move))
+        board.push(move)
+    return json.dumps(
+        [initial_fen, " ".join(canonical_moves), white, black, result],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def _winning_chances(centipawns: int) -> float:
@@ -400,6 +422,12 @@ def derive_lichess_metadata(game: GameDocument) -> GameMetadata:
     time_control = f'{clock["initial"]}+{clock["increment"]}'
     opening = game.get("opening")
     game_id = game["id"]
+    board = chess.Board()
+    moves: list[chess.Move] = []
+    for san in game["moves"].split():
+        move = board.parse_san(san)
+        moves.append(move)
+        board.push(move)
     headers = {
         "Site": f"https://lichess.org/{game_id}",
         "White": white["user"]["name"],
@@ -439,6 +467,13 @@ def derive_lichess_metadata(game: GameDocument) -> GameMetadata:
         eco=None if opening is None else opening["eco"],
         opening=None if opening is None else opening["name"],
         headers=headers,
+        canonical_document=canonical_game_document(
+            initial_fen=chess.STARTING_FEN,
+            moves=moves,
+            white=white["user"]["name"],
+            black=black["user"]["name"],
+            result=result,
+        ),
     )
 
 

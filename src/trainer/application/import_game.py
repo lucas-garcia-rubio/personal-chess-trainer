@@ -1,13 +1,20 @@
 from dataclasses import dataclass
 import hashlib
 import io
+import re
 from typing import cast
+from urllib.parse import urlsplit
 
 import chess
 import chess.pgn
 
-from trainer.application.ports import LocalStorage, PositionEvaluator
-from trainer.domain import GameMetadata, derive_import_analysis, derive_operational_instant
+from trainer.application.ports import GameIdentityConflict, LocalStorage, PositionEvaluator
+from trainer.domain import (
+    GameMetadata,
+    canonical_game_document,
+    derive_import_analysis,
+    derive_operational_instant,
+)
 
 
 class ImportValidationError(ValueError):
@@ -144,6 +151,30 @@ class ImportGame:
             )
 
         moves = list(game.mainline_moves())
+        canonical_document = canonical_game_document(
+            initial_fen=initial_fen,
+            moves=moves,
+            white=white,
+            black=black,
+            result=result_header,
+        )
+        lichess_id = _lichess_id(headers)
+        if lichess_id is None:
+            origin = "content-sha256"
+            origin_id = hashlib.sha256(
+                canonical_document.encode("utf-8")
+            ).hexdigest()
+        else:
+            origin = "lichess"
+            origin_id = lichess_id
+        existing = self._storage.get_canonical_document(origin, origin_id)
+        if existing is not None:
+            if existing != canonical_document:
+                raise ImportValidationError(
+                    f"This PGN conflicts with the existing Lichess Game {origin_id}."
+                )
+            return ImportedGame(origin=origin, origin_id=origin_id)
+
         positions = [board.fen()]
         for move in moves:
             board.push(move)
@@ -152,8 +183,6 @@ class ImportGame:
         if len(evaluation_run.evaluations) != len(positions):
             raise RuntimeError("The evaluator did not return one evaluation per position.")
 
-        origin = "content-sha256"
-        origin_id = hashlib.sha256(raw_pgn.encode("utf-8")).hexdigest()
         played_at = derive_operational_instant(headers)
         time_control = headers.get("TimeControl", "-")
         analysis = derive_import_analysis(
@@ -180,8 +209,14 @@ class ImportGame:
             eco=headers.get("ECO"),
             opening=headers.get("Opening"),
             headers=headers,
+            canonical_document=canonical_document,
         )
-        self._storage.save_game(raw_pgn, metadata, analysis)
+        try:
+            self._storage.save_game(raw_pgn, metadata, analysis)
+        except GameIdentityConflict as error:
+            raise ImportValidationError(
+                f"This PGN conflicts with the existing Lichess Game {origin_id}."
+            ) from error
         return ImportedGame(origin=origin, origin_id=origin_id)
 
 
@@ -198,3 +233,22 @@ def _speed(time_control: str) -> str:
     if estimated < 1500:
         return "rapid"
     return "classical"
+
+
+def _lichess_id(headers: dict[str, str]) -> str | None:
+    game_id = headers.get("GameId")
+    site = headers.get("Site")
+    if game_id is None or site is None:
+        return None
+    if re.fullmatch(r"[A-Za-z0-9]{8}", game_id) is None:
+        return None
+    parsed = urlsplit(site)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
+        "lichess.org",
+        "www.lichess.org",
+    }:
+        return None
+    path_id = parsed.path.strip("/").split("/", maxsplit=1)[0]
+    if path_id != game_id:
+        return None
+    return game_id
