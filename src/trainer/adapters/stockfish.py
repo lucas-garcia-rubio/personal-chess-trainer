@@ -14,7 +14,10 @@ import re
 import shutil
 import subprocess
 from threading import Thread
+import time
 from typing import IO, Self, cast
+
+import chess
 
 from trainer.config import EngineSettings
 from trainer.domain import (
@@ -25,7 +28,6 @@ from trainer.domain import (
     ScoreKind,
 )
 
-_RESPONSE_TIMEOUT_SECONDS = 20.0
 _QUIT_TIMEOUT_SECONDS = 5.0
 _EOF = ""
 _VERSION = re.compile(r"\d+(?:\.\d+)*")
@@ -42,7 +44,8 @@ class StockfishEvaluator:
         self._settings = settings
 
     def evaluate_positions(self, positions: Sequence[str]) -> EvaluationRun:
-        with _UciSession(self._command(), self._settings) as session:
+        deadline = time.monotonic() + self._settings.timeout_seconds
+        with _UciSession(self._command(), self._settings, deadline) as session:
             provenance = session.provenance()
             evaluations = [session.evaluate(fen) for fen in positions]
         return EvaluationRun(provenance=provenance, evaluations=evaluations)
@@ -63,9 +66,12 @@ class StockfishEvaluator:
 class _UciSession:
     """One UCI conversation, from the ``uci`` handshake to ``quit``."""
 
-    def __init__(self, command: list[str], settings: EngineSettings) -> None:
+    def __init__(
+        self, command: list[str], settings: EngineSettings, deadline: float
+    ) -> None:
         self._command = command
         self._settings = settings
+        self._deadline = deadline
         self._process: subprocess.Popen[str]
         self._lines: queue.Queue[str] = queue.Queue()
         self._reader: Thread
@@ -151,10 +157,11 @@ class _UciSession:
                     raise StockfishError(
                         f"Stockfish returned a malformed bestmove line: {line!r}."
                     )
-                best_move = None if tokens[1] == "(none)" else tokens[1]
+                best_move = None if tokens[1] in {"(none)", "0000"} else tokens[1]
                 break
         if score is None:
             raise StockfishError(f"Stockfish reported no score for the position {fen}.")
+        _validate_uci_moves(fen, best_move, variation)
         value = score.value
         if _black_to_move(fen):
             value = -value
@@ -176,15 +183,28 @@ class _UciSession:
             ) from error
 
     def _read(self, awaiting: str) -> str:
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise self._timeout_error()
         try:
-            line = self._lines.get(timeout=_RESPONSE_TIMEOUT_SECONDS)
+            line = self._lines.get(timeout=remaining)
         except queue.Empty as error:
-            raise StockfishError(
-                f"Stockfish did not answer while awaiting {awaiting}."
-            ) from error
+            raise self._timeout_error() from error
         if line == _EOF:
-            raise StockfishError(f"Stockfish exited while awaiting {awaiting}.")
+            return_code = self._process.poll()
+            raise StockfishError(
+                f"Stockfish exited with code {return_code} while awaiting {awaiting}."
+            )
         return line
+
+    def _timeout_error(self) -> StockfishError:
+        seconds = self._settings.timeout_seconds
+        unit = "second" if seconds == 1 else "seconds"
+        return StockfishError(
+            "Stockfish exceeded the configured total timeout of "
+            f"{seconds} {unit}. Increase [engine] timeout_seconds or reduce "
+            "the Game length or engine depth."
+        )
 
     def close(self) -> None:
         process = getattr(self, "_process", None)
@@ -259,6 +279,28 @@ def _detect_version(name: str) -> str | None:
         if _VERSION.fullmatch(token):
             return token
     return None
+
+
+def _validate_uci_moves(
+    fen: str, best_move: str | None, variation: list[str] | None
+) -> None:
+    if best_move is not None:
+        try:
+            chess.Board(fen).parse_uci(best_move)
+        except ValueError as error:
+            raise StockfishError(
+                f"Stockfish returned the invalid UCI move {best_move!r}."
+            ) from error
+
+    board = chess.Board(fen)
+    for move_text in variation or []:
+        try:
+            move = board.parse_uci(move_text)
+        except ValueError as error:
+            raise StockfishError(
+                f"Stockfish returned the invalid UCI move {move_text!r}."
+            ) from error
+        board.push(move)
 
 
 def _black_to_move(fen: str) -> bool:

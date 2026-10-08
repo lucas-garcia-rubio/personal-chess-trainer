@@ -8,7 +8,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from trainer.application.ports import GameSource, LocalStorage
-from trainer.application.import_game import ImportGame, ImportValidationError
+from trainer.application.import_game import (
+    ImportEvaluationError,
+    ImportGame,
+    ImportValidationError,
+)
 from trainer.application.sync import SyncGames
 
 _templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
@@ -55,7 +59,7 @@ def create_web_app(
         pgn = fields.get("pgn", [""])[0]
         try:
             imported = import_game(pgn)
-        except ImportValidationError as error:
+        except (ImportValidationError, ImportEvaluationError) as error:
             return _templates.TemplateResponse(
                 request,
                 "import.html",

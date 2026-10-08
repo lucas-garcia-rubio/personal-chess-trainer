@@ -22,6 +22,17 @@ username = "seu-username"
 [database]
 path = "data/trainer.db"
 
+# Opcional quando `stockfish` ja esta no PATH. Os demais valores abaixo sao os
+# defaults; depth aceita 1-128, threads 1-1024, hash 1-33554432 MB,
+# max_plies 1-10000 e timeout_seconds 1-3600.
+[engine]
+path = "/caminho/para/stockfish"
+depth = 15
+threads = 1
+hash = 128
+max_plies = 1000
+timeout_seconds = 600
+
 # Opcional quando `flyway` ja esta no PATH.
 [migration]
 flyway_path = "/caminho/para/flyway"

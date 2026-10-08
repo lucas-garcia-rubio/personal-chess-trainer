@@ -21,6 +21,10 @@ class ImportValidationError(ValueError):
     """The submitted document is not a supported Game for Import."""
 
 
+class ImportEvaluationError(RuntimeError):
+    """The evaluator could not produce a complete Analysis for an Import."""
+
+
 class _ImportedGame(chess.pgn.Game):
     """A parsed Game that remembers the headers its document actually carried.
 
@@ -65,10 +69,12 @@ class ImportGame:
         evaluator: PositionEvaluator,
         storage: LocalStorage,
         player_username: str,
+        max_plies: int = 1000,
     ) -> None:
         self._evaluator = evaluator
         self._storage = storage
         self._player_username = player_username
+        self._max_plies = max_plies
 
     def __call__(self, raw_pgn: str) -> ImportedGame:
         raw_pgn = raw_pgn.strip()
@@ -151,6 +157,11 @@ class ImportGame:
             )
 
         moves = list(game.mainline_moves())
+        if len(moves) > self._max_plies:
+            raise ImportValidationError(
+                f"A Game may contain at most {self._max_plies} plies; "
+                f"this one contains {len(moves)}."
+            )
         canonical_document = canonical_game_document(
             initial_fen=initial_fen,
             moves=moves,
@@ -179,9 +190,16 @@ class ImportGame:
         for move in moves:
             board.push(move)
             positions.append(board.fen())
-        evaluation_run = self._evaluator.evaluate_positions(positions)
-        if len(evaluation_run.evaluations) != len(positions):
-            raise RuntimeError("The evaluator did not return one evaluation per position.")
+        try:
+            evaluation_run = self._evaluator.evaluate_positions(positions)
+            if len(evaluation_run.evaluations) != len(positions):
+                raise RuntimeError(
+                    "The evaluator did not return one evaluation per position."
+                )
+        except Exception as error:
+            raise ImportEvaluationError(
+                f"Could not analyze the Game: {error}"
+            ) from error
 
         played_at = derive_operational_instant(headers)
         time_control = headers.get("TimeControl", "-")

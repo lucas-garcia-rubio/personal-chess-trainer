@@ -28,5 +28,10 @@ def create_app(
         if position_evaluator is None
         else position_evaluator
     )
-    import_game = ImportGame(evaluator, storage, settings.lichess_username)
+    import_game = ImportGame(
+        evaluator,
+        storage,
+        settings.lichess_username,
+        max_plies=settings.engine.max_plies,
+    )
     return create_web_app(storage, game_source, sync_games, import_game)

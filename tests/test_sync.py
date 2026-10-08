@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from lichess_mock import LichessMock
 
 from trainer.bootstrap import create_app
-from trainer.config import Settings
+from trainer.config import EngineSettings, Settings
 from trainer.domain import EvaluationRun
 
 
@@ -111,6 +111,35 @@ def test_sync_persists_a_lichess_game_and_home_reopens_offline(
 
     assert reopened_home.status_code == 200
     assert 'href="/analyses/lichess/q7ZvsdUF"' in reopened_home.text
+
+
+def test_missing_stockfish_does_not_affect_sync_home_or_persisted_analysis(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    base_settings = migrated_settings("Lance5500")
+    settings = Settings(
+        lichess_username=base_settings.lichess_username,
+        database_path=base_settings.database_path,
+        engine=EngineSettings(
+            executable=base_settings.database_path.parent / "missing-stockfish"
+        ),
+    )
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+    )
+
+    with TestClient(app) as client:
+        synced = client.post("/sync", follow_redirects=False)
+        home = client.get("/")
+        analysis = client.get("/analyses/lichess/q7ZvsdUF")
+
+    assert synced.status_code == 303
+    assert home.status_code == 200
+    assert "TryingHard87" in home.text
+    assert analysis.status_code == 200
+    assert "Analysis vs TryingHard87" in analysis.text
 
 
 def test_sync_ignores_whitespace_around_the_lichess_document(

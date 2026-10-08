@@ -37,7 +37,8 @@ def test_load_settings_reads_engine_configuration_and_resolves_relative_path(
     config_path.write_text(
         '[lichess]\nusername = "test-player"\n\n'
         '[database]\npath = "data/trainer.db"\n\n'
-        '[engine]\npath = "engines/stockfish"\ndepth = 20\nthreads = 4\nhash = 256\n',
+        '[engine]\npath = "engines/stockfish"\ndepth = 20\nthreads = 4\n'
+        'hash = 256\nmax_plies = 800\ntimeout_seconds = 300\n',
         encoding="utf-8",
     )
 
@@ -48,6 +49,8 @@ def test_load_settings_reads_engine_configuration_and_resolves_relative_path(
         depth=20,
         threads=4,
         hash_mb=256,
+        max_plies=800,
+        timeout_seconds=300,
     )
 
 
@@ -68,6 +71,8 @@ def test_load_settings_keeps_stockfish_on_path_when_no_engine_path_is_configured
     assert settings.engine.depth == 18
     assert settings.engine.threads == 1
     assert settings.engine.hash_mb == 128
+    assert settings.engine.max_plies == 1000
+    assert settings.engine.timeout_seconds == 600
 
 
 def test_load_settings_reads_and_resolves_the_flyway_path(tmp_path: Path) -> None:
@@ -92,8 +97,15 @@ def test_load_settings_reads_and_resolves_the_flyway_path(tmp_path: Path) -> Non
         ("[engine]\npath = 42\n", "Set [engine] path"),
         ("[engine]\ndepth = 0\n", "Set [engine] depth to a positive integer"),
         ("[engine]\ndepth = true\n", "Set [engine] depth to a positive integer"),
+        ("[engine]\ndepth = 129\n", "Set [engine] depth between 1 and 128"),
         ("[engine]\nthreads = -2\n", "Set [engine] threads to a positive integer"),
+        ("[engine]\nthreads = 1025\n", "Set [engine] threads between 1 and 1024"),
         ('[engine]\nhash = "big"\n', "Set [engine] hash to a positive integer"),
+        ("[engine]\nhash = 33554433\n", "Set [engine] hash between 1 and 33554432"),
+        ("[engine]\nmax_plies = 0\n", "Set [engine] max_plies to a positive integer"),
+        ("[engine]\nmax_plies = 10001\n", "Set [engine] max_plies between 1 and 10000"),
+        ("[engine]\ntimeout_seconds = false\n", "Set [engine] timeout_seconds to a positive integer"),
+        ("[engine]\ntimeout_seconds = 3601\n", "Set [engine] timeout_seconds between 1 and 3600"),
         ('[migration]\nflyway_path = 42\n', "Set [migration] flyway_path"),
     ],
 )

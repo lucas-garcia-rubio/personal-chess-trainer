@@ -11,6 +11,8 @@ class EngineSettings:
     depth: int = 15
     threads: int = 1
     hash_mb: int = 128
+    max_plies: int = 1000
+    timeout_seconds: int = 600
 
 
 @dataclass(frozen=True)
@@ -85,18 +87,35 @@ def _load_engine_settings(config: dict[str, object], config_path: Path) -> Engin
 
     return EngineSettings(
         executable=executable,
-        depth=_engine_option(engine, "depth", EngineSettings.depth),
-        threads=_engine_option(engine, "threads", EngineSettings.threads),
-        hash_mb=_engine_option(engine, "hash", EngineSettings.hash_mb),
+        depth=_engine_option(engine, "depth", EngineSettings.depth, maximum=128),
+        threads=_engine_option(
+            engine, "threads", EngineSettings.threads, maximum=1024
+        ),
+        hash_mb=_engine_option(
+            engine, "hash", EngineSettings.hash_mb, maximum=33_554_432
+        ),
+        max_plies=_engine_option(
+            engine, "max_plies", EngineSettings.max_plies, maximum=10_000
+        ),
+        timeout_seconds=_engine_option(
+            engine,
+            "timeout_seconds",
+            EngineSettings.timeout_seconds,
+            maximum=3_600,
+        ),
     )
 
 
-def _engine_option(engine: dict[str, object], key: str, default: int) -> int:
+def _engine_option(
+    engine: dict[str, object], key: str, default: int, *, maximum: int
+) -> int:
     value = engine.get(key)
     if value is None:
         return default
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         raise ConfigError(f"Set [engine] {key} to a positive integer.")
+    if value > maximum:
+        raise ConfigError(f"Set [engine] {key} between 1 and {maximum}.")
     return value
 
 

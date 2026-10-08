@@ -1,6 +1,7 @@
 from collections.abc import Callable, Sequence
 import io
 import json
+from pathlib import Path
 import sqlite3
 
 import chess
@@ -11,7 +12,7 @@ from markupsafe import escape
 
 from lichess_mock import LichessMock
 from trainer.bootstrap import create_app
-from trainer.config import Settings
+from trainer.config import EngineSettings, Settings
 from trainer.domain import (
     EvaluationRun,
     EvaluationScore,
@@ -134,6 +135,16 @@ class SetupPositionEvaluator:
         )
 
 
+class NeverCalledEvaluator:
+    def evaluate_positions(self, positions: Sequence[str]) -> EvaluationRun:
+        raise AssertionError("an oversized Import must be rejected before evaluation")
+
+
+class FailingEvaluator:
+    def evaluate_positions(self, positions: Sequence[str]) -> EvaluationRun:
+        raise RuntimeError("the engine failed while evaluating a position")
+
+
 def test_import_pgn_redirects_to_persisted_analysis_and_reopens_offline(
     migrated_settings: Callable[[str], Settings],
     lichess_mock: LichessMock,
@@ -201,6 +212,186 @@ def test_import_pgn_redirects_to_persisted_analysis_and_reopens_offline(
     assert "Played: e4" in analysis.text
     assert "Best: d4" in analysis.text
     assert "Blunder" in analysis.text
+
+
+def test_import_rejects_too_many_plies_before_evaluation(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    base_settings = migrated_settings("test-player")
+    settings = Settings(
+        lichess_username=base_settings.lichess_username,
+        database_path=base_settings.database_path,
+        engine=EngineSettings(max_plies=2),
+    )
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "Import must not call Lichess"
+        ),
+        position_evaluator=NeverCalledEvaluator(),
+    )
+
+    with TestClient(app) as client:
+        assert_rejected(client, settings, PGN, "at most 2 plies", "contains 3")
+
+
+def test_import_rejects_more_than_one_thousand_plies_by_default(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    game = chess.pgn.Game()
+    game.headers.update(
+        {"White": "test-player", "Black": "Opponent", "Result": "1/2-1/2"}
+    )
+    board = game.board()
+    node: chess.pgn.GameNode = game
+    cycle = ["g1f3", "g8f6", "f3g1", "f6g8"]
+    for index in range(1001):
+        move = chess.Move.from_uci(cycle[index % len(cycle)])
+        node = node.add_variation(move)
+        board.push(move)
+    pgn = game.accept(
+        chess.pgn.StringExporter(headers=True, variations=False, comments=False)
+    )
+    settings = migrated_settings("test-player")
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "Import must not call Lichess"
+        ),
+        position_evaluator=NeverCalledEvaluator(),
+    )
+
+    with TestClient(app) as client:
+        assert_rejected(client, settings, pgn, "at most 1000 plies", "contains 1001")
+
+
+def test_missing_stockfish_only_fails_the_import_attempt(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    base_settings = migrated_settings("test-player")
+    settings = Settings(
+        lichess_username=base_settings.lichess_username,
+        database_path=base_settings.database_path,
+        engine=EngineSettings(
+            executable=base_settings.database_path.parent / "missing-stockfish"
+        ),
+    )
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "Import and Home must not call Lichess"
+        ),
+    )
+
+    with TestClient(app) as client:
+        home = client.get("/")
+        assert_rejected(
+            client,
+            settings,
+            PGN,
+            "Could not analyze the Game",
+            "Could not start the configured engine executable",
+            "[engine] path",
+        )
+
+    assert home.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected_error", "expects_quit"),
+    [
+        (
+            {"name": "StubEngine 2.3", "positions": {}},
+            "exceeded the configured total timeout of 1 second",
+            True,
+        ),
+        (
+            {"name": "StubEngine 2.3", "exit_on": "go", "exit_code": 17},
+            "exited with code 17 while awaiting",
+            False,
+        ),
+        (
+            {
+                "name": "StubEngine 2.3",
+                "positions": {
+                    chess.STARTING_FEN: [
+                        "info depth 15 score cp 10 pv zzzz",
+                        "bestmove zzzz",
+                    ]
+                },
+            },
+            "invalid UCI move &#39;zzzz&#39;",
+            True,
+        ),
+    ],
+)
+def test_uci_failure_is_reported_without_persistence_and_process_is_stopped(
+    scenario: dict[str, object],
+    expected_error: str,
+    expects_quit: bool,
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable = tmp_path / "engine"
+    executable.write_text(
+        (Path(__file__).parent / "uci_engine_stub.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    log_path = tmp_path / "commands.log"
+    scenario_path = tmp_path / "scenario.json"
+    scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
+    monkeypatch.setenv("UCI_ENGINE_LOG", str(log_path))
+    monkeypatch.setenv("UCI_ENGINE_SCENARIO", str(scenario_path))
+    base_settings = migrated_settings("test-player")
+    settings = Settings(
+        lichess_username=base_settings.lichess_username,
+        database_path=base_settings.database_path,
+        engine=EngineSettings(executable=executable, timeout_seconds=1),
+    )
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "Import must not call Lichess"
+        ),
+    )
+
+    with TestClient(app) as client:
+        assert_rejected(client, settings, PGN, expected_error)
+
+    commands = log_path.read_text(encoding="utf-8").splitlines()
+    if expects_quit:
+        assert commands[-1] == "quit"
+    else:
+        assert commands[-1] == "go depth 15"
+
+
+def test_import_reports_evaluation_failure_without_persisting(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    settings = migrated_settings("test-player")
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "Import must not call Lichess"
+        ),
+        position_evaluator=FailingEvaluator(),
+    )
+
+    with TestClient(app) as client:
+        assert_rejected(
+            client,
+            settings,
+            PGN,
+            "Could not analyze the Game",
+            "engine failed while evaluating a position",
+        )
 
 
 def test_import_ignores_whitespace_around_the_pgn_document(

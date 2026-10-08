@@ -260,11 +260,13 @@ def test_survives_blank_lines_in_the_uci_reply(
 def test_reports_an_engine_that_exits_during_the_handshake(
     stub_engine: StubEngine,
 ) -> None:
-    stub_engine.script({"name": "StubEngine", "exit_on": "uci"})
+    stub_engine.script({"name": "StubEngine", "exit_on": "uci", "exit_code": 17})
     evaluator = StockfishEvaluator(EngineSettings(executable=stub_engine.executable))
 
-    with pytest.raises(StockfishError, match="exited while awaiting"):
+    with pytest.raises(StockfishError, match="exited with code 17 while awaiting"):
         evaluator.evaluate_positions([START_FEN])
+
+    assert stub_engine.commands() == ["start", "uci"]
 
 
 def test_reports_a_position_evaluated_without_a_score(
@@ -277,3 +279,52 @@ def test_reports_a_position_evaluated_without_a_score(
 
     with pytest.raises(StockfishError, match="reported no score"):
         evaluator.evaluate_positions([START_FEN])
+
+    assert stub_engine.commands()[-1] == "quit"
+
+
+def test_total_timeout_stops_the_engine_process(stub_engine: StubEngine) -> None:
+    stub_engine.script(
+        {"name": "StubEngine 2.3", "positions": {START_FEN: []}}
+    )
+    evaluator = StockfishEvaluator(
+        EngineSettings(executable=stub_engine.executable, timeout_seconds=1)
+    )
+
+    with pytest.raises(
+        StockfishError, match="exceeded the configured total timeout of 1 second"
+    ):
+        evaluator.evaluate_positions([START_FEN])
+
+    assert stub_engine.commands()[-1] == "quit"
+
+
+def test_malformed_uci_response_stops_the_engine_process(
+    stub_engine: StubEngine,
+) -> None:
+    stub_engine.script(
+        {"name": "StubEngine 2.3", "positions": {START_FEN: ["bestmove"]}}
+    )
+    evaluator = StockfishEvaluator(EngineSettings(executable=stub_engine.executable))
+
+    with pytest.raises(StockfishError, match="malformed bestmove"):
+        evaluator.evaluate_positions([START_FEN])
+
+    assert stub_engine.commands()[-1] == "quit"
+
+
+def test_illegal_uci_move_stops_the_engine_process(stub_engine: StubEngine) -> None:
+    stub_engine.script(
+        {
+            "name": "StubEngine 2.3",
+            "positions": {
+                START_FEN: ["info depth 15 score cp 10 pv zzzz", "bestmove zzzz"]
+            },
+        }
+    )
+    evaluator = StockfishEvaluator(EngineSettings(executable=stub_engine.executable))
+
+    with pytest.raises(StockfishError, match="invalid UCI move 'zzzz'"):
+        evaluator.evaluate_positions([START_FEN])
+
+    assert stub_engine.commands()[-1] == "quit"

@@ -37,6 +37,7 @@ def main() -> None:
     }
     exit_prefix = scenario.get("exit_on")
     exit_on = str(exit_prefix) if exit_prefix is not None else None
+    exit_code = int(scenario.get("exit_code", 0))
     blank_lines = bool(scenario.get("blank_lines", False))
 
     with Path(os.environ["UCI_ENGINE_LOG"]).open("a", encoding="utf-8") as log:
@@ -48,7 +49,7 @@ def main() -> None:
             log.write(f"{command}\n")
             log.flush()
             if exit_on is not None and command.startswith(exit_on):
-                return
+                raise SystemExit(exit_code)
             if command == "quit":
                 return
             if command == "uci":
