@@ -113,6 +113,30 @@ def test_sync_persists_a_lichess_game_and_home_reopens_offline(
     assert 'href="/analyses/lichess/q7ZvsdUF"' in reopened_home.text
 
 
+def test_sync_ignores_whitespace_around_the_lichess_document(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    settings = migrated_settings("Lance5500")
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.games_for(
+            "Lance5500", ndjson=f"  \t{lichess_mock.fixture.strip()} \t "
+        ),
+        position_evaluator=UnusedLocalEvaluator(),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/sync", follow_redirects=True)
+
+    assert response.status_code == 200
+    with sqlite3.connect(settings.database_path) as database:
+        raw_document = database.execute(
+            "SELECT raw_document FROM games WHERE origin_id = ?", ("q7ZvsdUF",)
+        ).fetchone()
+    assert raw_document == (lichess_mock.fixture.strip(),)
+
+
 def test_sync_falls_back_safely_when_a_game_reports_no_valid_date(
     migrated_settings: Callable[[str], Settings],
     lichess_mock: LichessMock,

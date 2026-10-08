@@ -18,6 +18,7 @@ class SyncGames:
 
     def __call__(self) -> None:
         for raw_document in self._game_source.fetch_games():
+            raw_document = raw_document.strip()
             game = cast(GameDocument, json.loads(raw_document))
             metadata = derive_lichess_metadata(game)
             existing = self._storage.get_canonical_document(
