@@ -1,7 +1,7 @@
-from pathlib import Path
 import json
 import os
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -52,7 +52,9 @@ def test_empty_database_is_validated_then_migrated(tmp_path: Path) -> None:
     assert commands[0] == "version"
     assert commands[1].endswith(" validate")
     assert commands[2].endswith(" migrate")
-    assert all(f"-url=jdbc:sqlite:{database_path.resolve()}" in line for line in commands[1:])
+    assert all(
+        f"-url=jdbc:sqlite:{database_path.resolve()}" in line for line in commands[1:]
+    )
 
 
 def test_exact_legacy_database_is_baselined_before_validation_and_migration(
@@ -164,8 +166,10 @@ def test_legacy_migration_backfills_metadata_without_changing_raw_or_analysis_hi
     database_path = tmp_path / "trainer.db"
     _legacy_database(database_path)
     raw_document = (
-        Path(__file__).parent / "fixtures" / "lichess_game.ndjson"
-    ).read_text(encoding="utf-8").strip()
+        (Path(__file__).parent / "fixtures" / "lichess_game.ndjson")
+        .read_text(encoding="utf-8")
+        .strip()
+    )
     legacy_analysis = {
         "source_id": "q7ZvsdUF",
         "created_at": 1514505150384,
@@ -268,8 +272,6 @@ def test_supported_flyway_distribution_migrates_empty_and_legacy_databases(
                 "WHERE success = 1 ORDER BY installed_rank"
             ).fetchall() == [("1",), ("2",)]
             primary_key = [
-                row[1]
-                for row in database.execute("PRAGMA table_info(games)")
-                if row[5]
+                row[1] for row in database.execute("PRAGMA table_info(games)") if row[5]
             ]
         assert primary_key == ["origin", "origin_id"]

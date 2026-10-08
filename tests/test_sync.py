@@ -1,13 +1,12 @@
-from collections.abc import Callable, Sequence
-from datetime import datetime, timezone
-from pathlib import Path
 import json
 import sqlite3
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 
-from fastapi.testclient import TestClient
 import pytest
-
+from fastapi.testclient import TestClient
 from lichess_mock import LichessMock
+
 from trainer.bootstrap import create_app
 from trainer.config import Settings
 from trainer.domain import EvaluationRun
@@ -15,7 +14,9 @@ from trainer.domain import EvaluationRun
 
 class UnusedLocalEvaluator:
     def evaluate_positions(self, positions: Sequence[str]) -> EvaluationRun:
-        raise AssertionError("Sync must not evaluate locally; it uses the server's evaluations")
+        raise AssertionError(
+            "Sync must not evaluate locally; it uses the server's evaluations"
+        )
 
 
 def test_sync_persists_a_lichess_game_and_home_reopens_offline(
@@ -119,7 +120,7 @@ def test_sync_falls_back_safely_when_a_game_reports_no_valid_date(
     settings = migrated_settings("Lance5500")
     undated = json.loads(lichess_mock.fixture)
     del undated["createdAt"]
-    started = datetime.now(tz=timezone.utc)
+    started = datetime.now(tz=UTC)
     app = create_app(
         settings,
         lichess_transport=lichess_mock.games_for(
@@ -131,7 +132,7 @@ def test_sync_falls_back_safely_when_a_game_reports_no_valid_date(
     with TestClient(app) as client:
         response = client.post("/sync", follow_redirects=True)
 
-    finished = datetime.now(tz=timezone.utc)
+    finished = datetime.now(tz=UTC)
     assert response.status_code == 200
     assert 'href="/analyses/lichess/q7ZvsdUF"' in response.text
     with sqlite3.connect(settings.database_path) as database:
@@ -142,14 +143,10 @@ def test_sync_falls_back_safely_when_a_game_reports_no_valid_date(
     assert stored is not None
     played_at, headers_document = stored
     assert (
-        int(started.timestamp() * 1000)
-        <= played_at
-        <= int(finished.timestamp() * 1000)
+        int(started.timestamp() * 1000) <= played_at <= int(finished.timestamp() * 1000)
     )
     headers = json.loads(headers_document)
-    assert all(
-        key not in headers for key in ("Date", "UTCDate", "UTCTime")
-    )
+    assert all(key not in headers for key in ("Date", "UTCDate", "UTCTime"))
 
 
 def test_sync_persists_no_invented_metadata_for_absent_values(
@@ -209,13 +206,15 @@ def test_sync_fails_locally_for_an_unexpected_lichess_request(
         lichess_transport=lichess_mock.games_for("expected-player"),
     )
 
-    with TestClient(app) as client:
-        with pytest.raises(
+    with (
+        TestClient(app) as client,
+        pytest.raises(
             AssertionError,
             match=(
                 "Unexpected Lichess request path: "
                 "/api/games/user/unexpected-player; "
                 "expected /api/games/user/expected-player"
             ),
-        ):
-            client.post("/sync")
+        ),
+    ):
+        client.post("/sync")
