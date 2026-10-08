@@ -8,6 +8,13 @@ from typing import Literal, NotRequired, TypeAlias, TypedDict
 import chess
 
 
+# Lichess primary sources:
+# https://github.com/lichess-org/scalachess/blob/2ab0a403d7f4a8a3a6dec2e898e6b4c301d0aaad/core/src/main/scala/eval.scala
+# https://github.com/lichess-org/lila/blob/f5b261e3d8ece6f511484e398cb8d81e37735bea/modules/tree/src/main/Advice.scala
+_WINNING_CHANCES_MULTIPLIER = -0.00368208
+_EVALUATION_CEILING = 1000
+
+
 class UserDocument(TypedDict):
     name: str
     id: str
@@ -182,8 +189,8 @@ def canonical_game_document(
 
 
 def _winning_chances(centipawns: int) -> float:
-    capped = max(-1000, min(1000, centipawns))
-    return 2 / (1 + math.exp(-0.00368208 * capped)) - 1
+    capped = max(-_EVALUATION_CEILING, min(_EVALUATION_CEILING, centipawns))
+    return 2 / (1 + math.exp(_WINNING_CHANCES_MULTIPLIER * capped)) - 1
 
 
 def _score(entry: EvaluationDocument) -> tuple[str, int] | None:
@@ -202,7 +209,11 @@ def _pov_value(score: tuple[str, int], white: bool) -> int:
 def _win_percent(score: tuple[str, int], white: bool) -> float:
     kind, value = score
     pov_value = value if white else -value
-    centipawns = pov_value if kind == "cp" else (1000 if pov_value > 0 else -1000)
+    centipawns = (
+        pov_value
+        if kind == "cp"
+        else (_EVALUATION_CEILING if pov_value > 0 else -_EVALUATION_CEILING)
+    )
     return 50 + 50 * _winning_chances(centipawns)
 
 
