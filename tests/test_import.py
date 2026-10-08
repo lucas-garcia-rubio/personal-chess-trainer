@@ -651,6 +651,28 @@ def test_import_rejects_leftover_game_content_after_the_first_game(
         )
 
 
+def test_import_rejects_unparsed_trailing_content(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    settings = migrated_settings("test-player")
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "Import must not call Lichess"
+        ),
+        position_evaluator=DeterministicEvaluator(),
+    )
+
+    with TestClient(app) as client:
+        assert_rejected(
+            client,
+            settings,
+            PGN + "\nthis content is not part of the Game",
+            "exactly one Game",
+        )
+
+
 def test_import_requires_white_black_and_result_headers(
     migrated_settings: Callable[[str], Settings],
     lichess_mock: LichessMock,
