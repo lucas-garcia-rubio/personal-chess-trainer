@@ -163,7 +163,7 @@ def test_import_pgn_redirects_to_persisted_analysis_and_reopens_offline(
             "SELECT raw_document, headers_document, analysis_document FROM games"
         ).fetchall()
     assert len(rows) == 1
-    assert rows[0][0] == PGN
+    assert rows[0][0] == PGN.strip()
     assert json.loads(rows[0][1])["X-Training-Tag"] == "preserve me"
     analysis_document = json.loads(rows[0][2])
     assert analysis_document["evaluator"] == {
@@ -193,6 +193,37 @@ def test_import_pgn_redirects_to_persisted_analysis_and_reopens_offline(
     assert "Played: e4" in analysis.text
     assert "Best: d4" in analysis.text
     assert "Blunder" in analysis.text
+
+
+def test_import_ignores_whitespace_around_the_pgn_document(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    settings = migrated_settings("test-player")
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "Import must not call Lichess"
+        ),
+        position_evaluator=DeterministicEvaluator(),
+    )
+
+    with TestClient(app) as client:
+        original = client.post(
+            "/imports", data={"pgn": PGN}, follow_redirects=False
+        )
+        padded = client.post(
+            "/imports", data={"pgn": f"\n \t{PGN}\n \t"}, follow_redirects=False
+        )
+
+    assert original.status_code == 303
+    assert padded.status_code == 303
+    assert padded.headers["location"] == original.headers["location"]
+    with sqlite3.connect(settings.database_path) as database:
+        rows = database.execute(
+            "SELECT raw_document FROM games WHERE origin = 'content-sha256'"
+        ).fetchall()
+    assert rows == [(PGN.strip(),)]
 
 
 def assert_rejected(
@@ -466,7 +497,7 @@ def test_import_honors_a_setup_position_and_only_analyzes_the_main_line(
         raw_document = database.execute(
             "SELECT raw_document FROM games"
         ).fetchone()[0]
-    assert raw_document == pgn
+    assert raw_document == pgn.strip()
 
 
 def test_import_analyzes_from_the_black_players_point_of_view(

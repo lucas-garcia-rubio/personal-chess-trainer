@@ -64,6 +64,7 @@ class ImportGame:
         self._player_username = player_username
 
     def __call__(self, raw_pgn: str) -> ImportedGame:
+        raw_pgn = raw_pgn.strip()
         document = io.StringIO(raw_pgn)
         game = cast(
             _ImportedGame | None,
