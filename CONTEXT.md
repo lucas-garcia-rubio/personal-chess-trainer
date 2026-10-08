@@ -24,6 +24,10 @@ _Avoid_: importar, atualizar, baixar
 A operação que recebe exatamente uma Game em PGN fornecida pelo Player e produz sua Analysis com um avaliador local.
 _Avoid_: Sync manual, sincronização manual
 
+**Instante Operacional**:
+O momento em que uma Game foi disputada, derivado dos headers: UTCDate com UTCTime, depois Date à meia-noite UTC, e por fim um fallback seguro quando não há data válida. É o que ordena a lista da Home.
+_Avoid_: data de criação, instante da Analysis
+
 ## Treino (futuro)
 
 **Trainer**:

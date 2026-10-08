@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import math
@@ -35,7 +36,7 @@ class ClockDocument(TypedDict):
 
 class GameDocument(TypedDict):
     id: str
-    createdAt: int
+    createdAt: NotRequired[int]
     speed: str
     status: str
     players: PlayersDocument
@@ -221,7 +222,9 @@ def _classify(
     return None
 
 
-def derive_analysis(game: GameDocument, player_username: str) -> Analysis:
+def derive_analysis(
+    game: GameDocument, player_username: str, played_at: int
+) -> Analysis:
     white_name = game["players"]["white"]["user"]["name"]
     black_name = game["players"]["black"]["user"]["name"]
     player_is_white = white_name.casefold() == player_username.casefold()
@@ -267,7 +270,7 @@ def derive_analysis(game: GameDocument, player_username: str) -> Analysis:
     clock = game["clock"]
     return Analysis(
         source_id=game["id"],
-        created_at=game["createdAt"],
+        created_at=played_at,
         opponent=opponent,
         result=result,
         speed=game["speed"],
@@ -367,9 +370,28 @@ def derive_import_analysis(
     )
 
 
+def derive_operational_instant(headers: Mapping[str, HeaderValue]) -> int:
+    """The instant a Game was played, in UTC milliseconds, from its headers.
+
+    UTCDate with UTCTime wins; a Date alone means midnight UTC; a Game without
+    a valid date falls back to the moment of the operation.
+    """
+    for value, pattern in (
+        (
+            f'{headers.get("UTCDate", "")} {headers.get("UTCTime", "")}',
+            "%Y.%m.%d %H:%M:%S",
+        ),
+        (headers.get("Date", ""), "%Y.%m.%d"),
+    ):
+        try:
+            parsed = datetime.strptime(value, pattern).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        return int(parsed.timestamp() * 1000)
+    return int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+
+
 def derive_lichess_metadata(game: GameDocument) -> GameMetadata:
-    created_at = game["createdAt"]
-    played = datetime.fromtimestamp(created_at / 1000, tz=timezone.utc)
     white = game["players"]["white"]
     black = game["players"]["black"]
     result = _game_result(game)
@@ -379,17 +401,21 @@ def derive_lichess_metadata(game: GameDocument) -> GameMetadata:
     game_id = game["id"]
     headers = {
         "Site": f"https://lichess.org/{game_id}",
-        "Date": played.strftime("%Y.%m.%d"),
         "White": white["user"]["name"],
         "Black": black["user"]["name"],
         "Result": result,
         "GameId": game_id,
-        "UTCDate": played.strftime("%Y.%m.%d"),
-        "UTCTime": played.strftime("%H:%M:%S"),
         "Variant": game.get("variant", "standard"),
         "TimeControl": time_control,
         "Termination": game["status"],
     }
+    created_at = game.get("createdAt")
+    # type() rather than isinstance(): a JSON true would otherwise pose as an epoch.
+    if type(created_at) is int and created_at >= 0:
+        played = datetime.fromtimestamp(created_at / 1000, tz=timezone.utc)
+        headers["Date"] = played.strftime("%Y.%m.%d")
+        headers["UTCDate"] = played.strftime("%Y.%m.%d")
+        headers["UTCTime"] = played.strftime("%H:%M:%S")
     arena = game.get("arenaTour")
     source = game.get("source")
     if arena is not None:
@@ -404,7 +430,7 @@ def derive_lichess_metadata(game: GameDocument) -> GameMetadata:
     return GameMetadata(
         origin="lichess",
         origin_id=game_id,
-        played_at=created_at,
+        played_at=derive_operational_instant(headers),
         white=white["user"]["name"],
         black=black["user"]["name"],
         result=result,

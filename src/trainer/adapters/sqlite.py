@@ -77,7 +77,7 @@ class SQLiteStorage:
         rows = self._connection.execute(
             """
             SELECT origin, origin_id, opponent, result, speed, critical_count
-            FROM games ORDER BY created_at DESC
+            FROM games ORDER BY played_at DESC
             """
         ).fetchall()
         return [

@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import hashlib
 import io
 
@@ -7,7 +6,7 @@ import chess
 import chess.pgn
 
 from trainer.application.ports import LocalStorage, PositionEvaluator
-from trainer.domain import GameMetadata, derive_import_analysis
+from trainer.domain import GameMetadata, derive_import_analysis, derive_operational_instant
 
 
 class ImportValidationError(ValueError):
@@ -64,7 +63,7 @@ class ImportGame:
 
         origin = "content-sha256"
         origin_id = hashlib.sha256(raw_pgn.encode("utf-8")).hexdigest()
-        played_at = _played_at(headers)
+        played_at = derive_operational_instant(headers)
         time_control = headers.get("TimeControl", "-")
         analysis = derive_import_analysis(
             source_id=origin_id,
@@ -92,22 +91,6 @@ class ImportGame:
         )
         self._storage.save_game(raw_pgn, metadata, analysis)
         return ImportedGame(origin=origin, origin_id=origin_id)
-
-
-def _played_at(headers: dict[str, str]) -> int:
-    for value, pattern in (
-        (
-            f'{headers.get("UTCDate", "")} {headers.get("UTCTime", "")}',
-            "%Y.%m.%d %H:%M:%S",
-        ),
-        (headers.get("Date", ""), "%Y.%m.%d"),
-    ):
-        try:
-            parsed = datetime.strptime(value, pattern).replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-        return int(parsed.timestamp() * 1000)
-    return int(datetime.now(tz=timezone.utc).timestamp() * 1000)
 
 
 def _speed(time_control: str) -> str:

@@ -19,6 +19,8 @@ class SyncGames:
     def __call__(self) -> None:
         for raw_document in self._game_source.fetch_games():
             game = cast(GameDocument, json.loads(raw_document))
-            analysis = derive_analysis(game, self._player_username)
             metadata = derive_lichess_metadata(game)
+            analysis = derive_analysis(
+                game, self._player_username, played_at=metadata.played_at
+            )
             self._storage.save_game(raw_document, metadata, analysis)

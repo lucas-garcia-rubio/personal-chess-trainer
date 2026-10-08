@@ -1,4 +1,5 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 import sqlite3
@@ -9,6 +10,12 @@ import pytest
 from lichess_mock import LichessMock
 from trainer.bootstrap import create_app
 from trainer.config import Settings
+from trainer.domain import EvaluationRun
+
+
+class UnusedLocalEvaluator:
+    def evaluate_positions(self, positions: Sequence[str]) -> EvaluationRun:
+        raise AssertionError("Sync must not evaluate locally; it uses the server's evaluations")
 
 
 def test_sync_persists_a_lichess_game_and_home_reopens_offline(
@@ -19,6 +26,7 @@ def test_sync_persists_a_lichess_game_and_home_reopens_offline(
     app = create_app(
         settings,
         lichess_transport=lichess_mock.games_for("Lance5500"),
+        position_evaluator=UnusedLocalEvaluator(),
     )
 
     with TestClient(app) as client:
@@ -54,7 +62,7 @@ def test_sync_persists_a_lichess_game_and_home_reopens_offline(
         lichess_mock.fixture.strip(),
         "lichess",
         "q7ZvsdUF",
-        1514505150384,
+        1514505150000,
         "Lance5500",
         "TryingHard87",
         "1/2-1/2",
@@ -102,6 +110,94 @@ def test_sync_persists_a_lichess_game_and_home_reopens_offline(
 
     assert reopened_home.status_code == 200
     assert 'href="/analyses/lichess/q7ZvsdUF"' in reopened_home.text
+
+
+def test_sync_falls_back_safely_when_a_game_reports_no_valid_date(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    settings = migrated_settings("Lance5500")
+    undated = json.loads(lichess_mock.fixture)
+    del undated["createdAt"]
+    started = datetime.now(tz=timezone.utc)
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.games_for(
+            "Lance5500", ndjson=json.dumps(undated)
+        ),
+        position_evaluator=UnusedLocalEvaluator(),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/sync", follow_redirects=True)
+
+    finished = datetime.now(tz=timezone.utc)
+    assert response.status_code == 200
+    assert 'href="/analyses/lichess/q7ZvsdUF"' in response.text
+    with sqlite3.connect(settings.database_path) as database:
+        stored = database.execute(
+            "SELECT played_at, headers_document FROM games WHERE origin_id = ?",
+            ("q7ZvsdUF",),
+        ).fetchone()
+    assert stored is not None
+    played_at, headers_document = stored
+    assert (
+        int(started.timestamp() * 1000)
+        <= played_at
+        <= int(finished.timestamp() * 1000)
+    )
+    headers = json.loads(headers_document)
+    assert all(
+        key not in headers for key in ("Date", "UTCDate", "UTCTime")
+    )
+
+
+def test_sync_persists_no_invented_metadata_for_absent_values(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    settings = migrated_settings("Lance5500")
+    minimal = json.loads(lichess_mock.fixture)
+    for player in minimal["players"].values():
+        del player["rating"]
+        del player["ratingDiff"]
+    del minimal["opening"]
+    del minimal["arenaTour"]
+    del minimal["source"]
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.games_for(
+            "Lance5500", ndjson=json.dumps(minimal)
+        ),
+        position_evaluator=UnusedLocalEvaluator(),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/sync", follow_redirects=True)
+
+    assert response.status_code == 200
+    with sqlite3.connect(settings.database_path) as database:
+        stored = database.execute(
+            "SELECT eco, opening, headers_document FROM games WHERE origin_id = ?",
+            ("q7ZvsdUF",),
+        ).fetchone()
+    assert stored is not None
+    eco, opening, headers_document = stored
+    assert eco is None
+    assert opening is None
+    assert json.loads(headers_document) == {
+        "Site": "https://lichess.org/q7ZvsdUF",
+        "Date": "2017.12.28",
+        "White": "Lance5500",
+        "Black": "TryingHard87",
+        "Result": "1/2-1/2",
+        "GameId": "q7ZvsdUF",
+        "UTCDate": "2017.12.28",
+        "UTCTime": "23:52:30",
+        "Variant": "standard",
+        "TimeControl": "300+3",
+        "Termination": "draw",
+    }
 
 
 def test_sync_fails_locally_for_an_unexpected_lichess_request(
