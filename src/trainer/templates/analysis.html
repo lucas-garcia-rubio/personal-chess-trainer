@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
   {% macro board(fen, label) -%}
-    <div class="board" aria-label="{{ label }}" data-fen="{{ fen }}"></div>
+    <div class="board" aria-label="{{ label }}" data-fen="{{ fen }}" data-orientation="{{ analysis.player_color }}"></div>
   {%- endmacro %}
   <head>
     <meta charset="utf-8">
@@ -55,7 +55,7 @@
       <h1>Analysis vs {{ analysis.opponent }}</h1>
       <p>{{ analysis.result }} · {{ analysis.speed }} · {{ analysis.time_control }}</p>
       <div class="layout">
-        {{ board("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "Initial chess position") }}
+        {{ board(analysis.evaluations[0].fen if analysis.evaluations else "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "Initial chess position") }}
         <section>
           <h2>Critical Moments</h2>
           {% for moment in analysis.critical_moments %}
@@ -78,6 +78,7 @@
       for (const element of document.querySelectorAll(".board")) {
         Chessground(element, {
           fen: element.dataset.fen,
+          orientation: element.dataset.orientation,
           coordinates: false,
           movable: { color: "both", free: true },
         });

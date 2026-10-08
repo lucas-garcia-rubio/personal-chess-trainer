@@ -298,6 +298,7 @@ def derive_import_analysis(
     moves: list[chess.Move],
     evaluation_run: EvaluationRun,
     player_username: str,
+    initial_fen: str = chess.STARTING_FEN,
 ) -> Analysis:
     player_is_white = white.casefold() == player_username.casefold()
     player_color = "white" if player_is_white else "black"
@@ -310,7 +311,7 @@ def derive_import_analysis(
         else None
     )
     result = "draw" if winner is None else ("win" if winner == player_color else "loss")
-    board = chess.Board()
+    board = chess.Board(initial_fen)
     moments: list[CriticalMoment] = []
 
     for index, move in enumerate(moves):
