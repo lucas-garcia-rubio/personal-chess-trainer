@@ -6,3 +6,4 @@ __pycache__/
 *.db
 config.toml
 data/
+flyway-13.9.0/
