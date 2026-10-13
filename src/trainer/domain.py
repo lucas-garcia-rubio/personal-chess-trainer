@@ -194,7 +194,7 @@ def _winning_chances(centipawns: int) -> float:
     return 2 / (1 + math.exp(_WINNING_CHANCES_MULTIPLIER * capped)) - 1
 
 
-def _score(entry: EvaluationDocument) -> tuple[str, int] | None:
+def _score(entry: EvaluationDocument) -> tuple[ScoreKind, int] | None:
     if "eval" in entry:
         return ("cp", entry["eval"])
     if "mate" in entry:
@@ -207,7 +207,7 @@ def _pov_value(score: tuple[str, int], white: bool) -> int:
     return value if white else -value
 
 
-def _win_percent(score: tuple[str, int], white: bool) -> float:
+def win_percent(score: tuple[str, int], white: bool) -> float:
     kind, value = score
     pov_value = value if white else -value
     centipawns = (
@@ -271,11 +271,12 @@ def derive_analysis(
     previous: tuple[str, int] | None = ("cp", 15)
     moments: list[CriticalMoment] = []
     moves = game["moves"].split()
-    evaluations = game.get("analysis", [])
+    evaluation_documents = game.get("analysis", [])
+    position_evaluations: list[PositionEvaluation] = []
     for index, san in enumerate(moves):
-        if index >= len(evaluations):
+        if index >= len(evaluation_documents):
             break
-        evaluation = evaluations[index]
+        evaluation = evaluation_documents[index]
         current = _score(evaluation)
         mover_is_white = board.turn == chess.WHITE
         move = board.parse_san(san)
@@ -295,11 +296,20 @@ def derive_analysis(
                         played=san,
                         best=board.san(best_move),
                         classification=classification,
-                        win_before=round(_win_percent(previous, player_is_white), 1),
-                        win_after=round(_win_percent(current, player_is_white), 1),
+                        win_before=round(win_percent(previous, player_is_white), 1),
+                        win_after=round(win_percent(current, player_is_white), 1),
                     )
                 )
         board.push(move)
+        if current is not None:
+            position_evaluations.append(
+                PositionEvaluation(
+                    fen=board.fen(),
+                    score=EvaluationScore(kind=current[0], value=current[1]),
+                    best_move=None,
+                    principal_variation=[],
+                )
+            )
         previous = current
 
     clock = game["clock"]
@@ -318,7 +328,8 @@ def derive_analysis(
             parameters={},
         ),
         critical_moments=moments,
-        has_evaluations=bool(evaluations),
+        has_evaluations=bool(evaluation_documents),
+        evaluations=position_evaluations,
     )
 
 
@@ -376,14 +387,14 @@ def derive_import_analysis(
                         best=best,
                         classification=classification,
                         win_before=round(
-                            _win_percent(
+                            win_percent(
                                 (before.score.kind, before.score.value),
                                 player_is_white,
                             ),
                             1,
                         ),
                         win_after=round(
-                            _win_percent(
+                            win_percent(
                                 (after.score.kind, after.score.value),
                                 player_is_white,
                             ),

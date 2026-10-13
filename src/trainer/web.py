@@ -17,7 +17,7 @@ from trainer.application.import_game import (
     ImportValidationError,
 )
 from trainer.application.sync import SyncGames
-from trainer.domain import Analysis
+from trainer.domain import Analysis, win_percent
 
 _templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
@@ -32,9 +32,15 @@ class _MomentHighlights(TypedDict):
     best: str
 
 
+class _EvaluationPoint(TypedDict):
+    positionIndex: int
+    winPercent: float
+
+
 class _AnalysisNavigation(TypedDict):
     positions: list[_NavigationPosition]
     moments: dict[str, _MomentHighlights]
+    evaluations: list[_EvaluationPoint]
 
 
 def _build_analysis_navigation(
@@ -59,7 +65,34 @@ def _build_analysis_navigation(
         board.push(move)
         positions.append({"fen": board.fen(), "lastMove": move.uci()})
 
-    return {"positions": positions, "moments": highlights}
+    evaluation_points: list[_EvaluationPoint] = []
+    next_evaluation = 0
+    player_is_white = analysis.player_color == "white"
+    for position_index, position in enumerate(positions):
+        if next_evaluation >= len(analysis.evaluations):
+            break
+        evaluation = analysis.evaluations[next_evaluation]
+        if evaluation.fen != position["fen"]:
+            continue
+        evaluation_points.append(
+            {
+                "positionIndex": position_index,
+                "winPercent": round(
+                    win_percent(
+                        (evaluation.score.kind, evaluation.score.value),
+                        player_is_white,
+                    ),
+                    1,
+                ),
+            }
+        )
+        next_evaluation += 1
+
+    return {
+        "positions": positions,
+        "moments": highlights,
+        "evaluations": evaluation_points,
+    }
 
 
 def create_web_app(

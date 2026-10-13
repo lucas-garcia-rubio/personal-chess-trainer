@@ -43,6 +43,37 @@
         margin-top: 0.75rem;
       }
       .board-controls output { text-align: center; }
+      .evaluation-panel {
+        max-width: 32rem;
+        margin: 1.5rem 0 0;
+      }
+      .evaluation-panel h2 { margin-bottom: 0.5rem; font-size: 1rem; }
+      .evaluation-curve {
+        display: block;
+        width: 100%;
+        aspect-ratio: 5 / 1;
+        overflow: visible;
+        border: 1px solid #4f493f;
+        border-radius: 0.25rem;
+        background: #211e19;
+      }
+      .evaluation-midline { stroke: #665d50; stroke-width: 1; }
+      .evaluation-line {
+        fill: none;
+        stroke: #dcb86b;
+        stroke-width: 4;
+        stroke-linejoin: round;
+        stroke-linecap: round;
+      }
+      .evaluation-point {
+        fill: #f3eee4;
+        stroke: #211e19;
+        stroke-width: 3;
+        cursor: pointer;
+      }
+      .evaluation-point:hover,
+      .evaluation-point:focus,
+      .evaluation-point.is-selected { fill: #d66a4a; outline: none; }
       button {
         padding: 0.6rem 0.85rem;
         border: 1px solid #665d50;
@@ -98,6 +129,16 @@
             <span data-brush="red">Played</span>
             <span data-brush="green">Best</span>
           </div>
+          <figure class="evaluation-panel">
+            <h2>Player Win%</h2>
+            {% if navigation.evaluations %}
+              <svg class="evaluation-curve" viewBox="0 0 1000 200" role="group" aria-label="Evaluation curve">
+                <line class="evaluation-midline" x1="0" y1="100" x2="1000" y2="100"></line>
+              </svg>
+            {% else %}
+              <p>No evaluations are available for this Game.</p>
+            {% endif %}
+          </figure>
         </section>
         <section>
           <h2>Critical Moments</h2>
@@ -123,33 +164,75 @@
     <script id="analysis-navigation" type="application/json">{{ navigation | tojson }}</script>
     <script type="module">
       import { Chessground } from "https://cdn.jsdelivr.net/npm/@lichess-org/chessground@10.4.2/+esm";
+      import { Chess } from "https://cdn.jsdelivr.net/npm/chess.js@1.4.0/+esm";
 
       const navigation = JSON.parse(document.querySelector("#analysis-navigation").textContent);
       const board = document.querySelector(".board");
+      const curve = document.querySelector(".evaluation-curve");
       const previous = document.querySelector('[data-direction="previous"]');
       const next = document.querySelector('[data-direction="next"]');
       const status = document.querySelector(".board-controls output");
       const moments = [...document.querySelectorAll(".moment")];
       let currentIndex = 0;
+      let chess = new Chess(navigation.positions[0].fen);
+
+      function legalDests(game) {
+        const dests = new Map();
+        for (const move of game.moves({ verbose: true })) {
+          const destinations = dests.get(move.from) || [];
+          if (!destinations.includes(move.to)) destinations.push(move.to);
+          dests.set(move.from, destinations);
+        }
+        return dests;
+      }
+
+      function movableConfig() {
+        return {
+          color: chess.turn() === "w" ? "white" : "black",
+          free: false,
+          dests: legalDests(chess),
+          events: { after: exploreMove },
+        };
+      }
 
       const ground = Chessground(board, {
         fen: navigation.positions[0].fen,
         orientation: board.dataset.orientation,
         coordinates: false,
-        movable: { color: "both", free: true },
+        movable: movableConfig(),
       });
 
       function squares(uci) {
         return [uci.slice(0, 2), uci.slice(2, 4)];
       }
 
+      function exploreMove(orig, dest) {
+        const legalMove = chess
+          .moves({ square: orig, verbose: true })
+          .find((move) => move.to === dest);
+        if (!legalMove) return;
+        const promotion = legalMove.promotion;
+        chess.move({ from: orig, to: dest, promotion });
+        ground.set({
+          fen: chess.fen(),
+          lastMove: [orig, dest],
+          turnColor: chess.turn() === "w" ? "white" : "black",
+          movable: movableConfig(),
+        });
+        ground.setAutoShapes([]);
+        status.value = `Variation from ${currentIndex === 0 ? "Start" : `ply ${currentIndex}`}`;
+      }
+
       function showPosition(index) {
         currentIndex = Math.max(0, Math.min(index, navigation.positions.length - 1));
         const position = navigation.positions[currentIndex];
         const highlights = navigation.moments[String(currentIndex)];
+        chess = new Chess(position.fen);
         ground.set({
           fen: position.fen,
           lastMove: highlights || !position.lastMove ? undefined : squares(position.lastMove),
+          turnColor: chess.turn() === "w" ? "white" : "black",
+          movable: movableConfig(),
         });
         const shapes = highlights
           ? [
@@ -168,6 +251,49 @@
           moment.classList.toggle("is-selected", selected);
           moment.querySelector("button").setAttribute("aria-pressed", String(selected));
         }
+        for (const point of document.querySelectorAll(".evaluation-point")) {
+          point.classList.toggle(
+            "is-selected",
+            Number(point.dataset.positionIndex) === currentIndex,
+          );
+        }
+      }
+
+      function renderEvaluationCurve() {
+        if (!curve) return;
+        const namespace = "http://www.w3.org/2000/svg";
+        const lastPosition = Math.max(navigation.positions.length - 1, 1);
+        const coordinates = navigation.evaluations.map((point) => ({
+          ...point,
+          x: (point.positionIndex / lastPosition) * 1000,
+          y: 200 - point.winPercent * 2,
+        }));
+        const line = document.createElementNS(namespace, "polyline");
+        line.classList.add("evaluation-line");
+        line.setAttribute("points", coordinates.map((point) => `${point.x},${point.y}`).join(" "));
+        curve.append(line);
+        for (const point of coordinates) {
+          const marker = document.createElementNS(namespace, "circle");
+          marker.classList.add("evaluation-point");
+          marker.dataset.positionIndex = String(point.positionIndex);
+          marker.setAttribute("cx", String(point.x));
+          marker.setAttribute("cy", String(point.y));
+          marker.setAttribute("r", "8");
+          marker.setAttribute("role", "button");
+          marker.setAttribute("tabindex", "0");
+          marker.setAttribute(
+            "aria-label",
+            `${point.positionIndex === 0 ? "Start" : `Ply ${point.positionIndex}`}: ${point.winPercent}% Player Win`,
+          );
+          marker.addEventListener("click", () => showPosition(point.positionIndex));
+          marker.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              showPosition(point.positionIndex);
+            }
+          });
+          curve.append(marker);
+        }
       }
 
       previous.addEventListener("click", () => showPosition(currentIndex - 1));
@@ -178,6 +304,7 @@
           () => showPosition(Number(moment.dataset.positionIndex)),
         );
       }
+      renderEvaluationCurve();
       showPosition(0);
     </script>
   </body>

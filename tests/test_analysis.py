@@ -99,6 +99,63 @@ def test_analysis_delivers_one_navigable_board_with_every_game_position(
     assert '<button type="button" data-direction="next">' in response.text
 
 
+def test_analysis_delivers_a_clickable_evaluation_curve_for_available_scores(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    settings = migrated_settings("Lance5500")
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+    )
+    with TestClient(app) as client:
+        client.post("/sync")
+
+    reopened_app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "the evaluation curve must use the persisted Analysis"
+        ),
+    )
+    with TestClient(reopened_app) as client:
+        response = client.get("/analyses/q7ZvsdUF")
+
+    navigation = _navigation_data(response.text)
+    evaluations = navigation["evaluations"]
+    assert isinstance(evaluations, list)
+    assert evaluations[:2] == [
+        {"positionIndex": 1, "winPercent": 50.7},
+        {"positionIndex": 2, "winPercent": 50.6},
+    ]
+    assert len(evaluations) == 125
+    assert '<svg class="evaluation-curve"' in response.text
+    assert 'aria-label="Evaluation curve"' in response.text
+    assert "showPosition(point.positionIndex)" in response.text
+
+
+def test_analysis_allows_only_legal_client_side_variations_from_known_positions(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    app = create_app(
+        migrated_settings("Lance5500"),
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+    )
+    with TestClient(app) as client:
+        client.post("/sync")
+        response = client.get("/analyses/q7ZvsdUF")
+
+    assert "chess.js" in response.text
+    assert "new Chess(position.fen)" in response.text
+    assert "free: false" in response.text
+    assert "dests: legalDests(chess)" in response.text
+    assert "after: exploreMove" in response.text
+    assert "chess.move({ from: orig, to: dest, promotion })" in response.text
+    assert "showPosition(currentIndex - 1)" in response.text
+    assert "showPosition(currentIndex + 1)" in response.text
+    assert "fetch(" not in response.text
+
+
 def test_selecting_a_critical_moment_targets_its_pre_move_position_and_highlights(
     migrated_settings: Callable[[str], Settings],
     lichess_mock: LichessMock,
