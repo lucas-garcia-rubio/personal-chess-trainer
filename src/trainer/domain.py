@@ -146,7 +146,7 @@ class GameSummary:
     origin_id: str
     opponent: str
     result: str
-    speed: str
+    time_control: str
     critical_count: int
 
 

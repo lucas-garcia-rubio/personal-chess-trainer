@@ -71,10 +71,16 @@ class SQLiteStorage:
         ).fetchone()
         return None if row is None else cast(str | None, row[0])
 
+    def latest_played_at(self, origin: str) -> int | None:
+        row = self._connection.execute(
+            "SELECT MAX(played_at) FROM games WHERE origin = ?", (origin,)
+        ).fetchone()
+        return None if row is None else cast(int | None, row[0])
+
     def list_games(self) -> list[GameSummary]:
         rows = self._connection.execute(
             """
-            SELECT origin, origin_id, opponent, result, speed, critical_count
+            SELECT origin, origin_id, opponent, result, time_control, critical_count
             FROM games ORDER BY played_at DESC
             """
         ).fetchall()

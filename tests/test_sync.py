@@ -40,7 +40,7 @@ def test_sync_persists_a_lichess_game_and_home_reopens_offline(
     request = lichess_mock.requests[0]
     assert request.method == "GET"
     assert request.url.path == "/api/games/user/Lance5500"
-    assert request.url.params["max"] == "1"
+    assert "max" not in request.url.params
     assert request.url.params["analysed"] == "true"
     assert request.url.params["evals"] == "true"
     assert request.url.params["clocks"] == "true"
@@ -164,6 +164,57 @@ def test_sync_ignores_whitespace_around_the_lichess_document(
             "SELECT raw_document FROM games WHERE origin_id = ?", ("q7ZvsdUF",)
         ).fetchone()
     assert raw_document == (lichess_mock.fixture.strip(),)
+
+
+def test_repeated_sync_is_incremental_and_preserves_overlapping_games(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    older = json.loads(lichess_mock.fixture)
+    older["id"] = "older"
+    older["createdAt"] = 1_700_000_000_000
+    older["speed"] = "rapid"
+    older["players"]["black"]["user"]["name"] = "Rapid Opponent"
+    newer = json.loads(lichess_mock.fixture)
+    newer["id"] = "newer"
+    newer["createdAt"] = 1_700_000_100_000
+    newer["speed"] = "bullet"
+    newer["clock"] = {"initial": 60, "increment": 0}
+    newer["players"]["black"]["user"]["name"] = "Bullet Opponent"
+    transport = lichess_mock.games_for(
+        "Lance5500",
+        ndjson_responses=[
+            json.dumps(older),
+            f"{json.dumps(older)}\n{json.dumps(newer)}",
+        ],
+    )
+    settings = migrated_settings("Lance5500")
+    app = create_app(
+        settings,
+        lichess_transport=transport,
+        position_evaluator=UnusedLocalEvaluator(),
+    )
+
+    with TestClient(app) as client:
+        first = client.post("/sync", follow_redirects=True)
+        second = client.post("/sync", follow_redirects=True)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert "since" not in lichess_mock.requests[0].url.params
+    assert lichess_mock.requests[1].url.params["since"] == "1700000000001"
+    assert second.text.index("Bullet Opponent") < second.text.index("Rapid Opponent")
+    assert "Bullet Opponent" in second.text
+    assert "draw · 60+0 · 8 Critical Moments" in second.text
+    with sqlite3.connect(settings.database_path) as database:
+        games = database.execute(
+            "SELECT origin_id, speed FROM games ORDER BY played_at DESC"
+        ).fetchall()
+        analyses = database.execute(
+            "SELECT COUNT(analysis_document) FROM games"
+        ).fetchone()
+    assert games == [("newer", "bullet"), ("older", "rapid")]
+    assert analyses == (2,)
 
 
 def test_sync_falls_back_safely_when_a_game_reports_no_valid_date(

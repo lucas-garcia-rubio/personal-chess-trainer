@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import quote
 
@@ -14,9 +15,11 @@ class LichessMock:
         username: str,
         *,
         ndjson: str | None = None,
+        ndjson_responses: Sequence[str] | None = None,
     ) -> httpx.MockTransport:
         expected_path = f"/api/games/user/{quote(username, safe='')}"
         response_body = self.fixture if ndjson is None else ndjson
+        responses = iter(ndjson_responses) if ndjson_responses is not None else None
 
         def handle(request: httpx.Request) -> httpx.Response:
             actual_path = request.url.raw_path.split(b"?", maxsplit=1)[0].decode()
@@ -33,7 +36,7 @@ class LichessMock:
             self.requests.append(request)
             return httpx.Response(
                 200,
-                text=response_body,
+                text=response_body if responses is None else next(responses),
                 headers={"content-type": "application/x-ndjson"},
             )
 

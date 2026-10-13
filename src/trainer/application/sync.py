@@ -17,7 +17,9 @@ class SyncGames:
         self._player_username = player_username
 
     def __call__(self) -> None:
-        for raw_document in self._game_source.fetch_games():
+        latest_played_at = self._storage.latest_played_at("lichess")
+        since = None if latest_played_at is None else latest_played_at + 1
+        for raw_document in self._game_source.fetch_games(since):
             raw_document = raw_document.strip()
             game = cast(GameDocument, json.loads(raw_document))
             metadata = derive_lichess_metadata(game)

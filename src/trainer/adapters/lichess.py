@@ -22,15 +22,17 @@ class LichessGameSource:
             timeout=30,
         )
 
-    def fetch_games(self) -> list[str]:
+    def fetch_games(self, since: int | None = None) -> list[str]:
+        params = {
+            "analysed": "true",
+            "evals": "true",
+            "clocks": "true",
+        }
+        if since is not None:
+            params["since"] = str(since)
         response = self._client.get(
             f"/api/games/user/{quote(self._username, safe='')}",
-            params={
-                "max": "1",
-                "analysed": "true",
-                "evals": "true",
-                "clocks": "true",
-            },
+            params=params,
             headers={"Accept": "application/x-ndjson"},
         )
         response.raise_for_status()
