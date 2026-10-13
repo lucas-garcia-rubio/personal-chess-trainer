@@ -169,6 +169,7 @@ class SQLiteStorage:
                 ),
             ),
             critical_moments=moments,
+            has_evaluations=cast(bool, document.get("has_evaluations", True)),
             evaluations=evaluations,
         )
 

@@ -49,7 +49,7 @@ class GameDocument(TypedDict):
     status: str
     players: PlayersDocument
     moves: str
-    analysis: list[EvaluationDocument]
+    analysis: NotRequired[list[EvaluationDocument]]
     clock: ClockDocument
     winner: NotRequired[str]
     source: NotRequired[str]
@@ -134,6 +134,7 @@ class Analysis:
     player_color: str
     evaluator: EvaluatorProvenance
     critical_moments: list[CriticalMoment]
+    has_evaluations: bool = True
     evaluations: list[PositionEvaluation] = field(default_factory=list)
 
     def to_document(self) -> dict[str, object]:
@@ -270,10 +271,11 @@ def derive_analysis(
     previous: tuple[str, int] | None = ("cp", 15)
     moments: list[CriticalMoment] = []
     moves = game["moves"].split()
+    evaluations = game.get("analysis", [])
     for index, san in enumerate(moves):
-        if index >= len(game["analysis"]):
+        if index >= len(evaluations):
             break
-        evaluation = game["analysis"][index]
+        evaluation = evaluations[index]
         current = _score(evaluation)
         mover_is_white = board.turn == chess.WHITE
         move = board.parse_san(san)
@@ -316,6 +318,7 @@ def derive_analysis(
             parameters={},
         ),
         critical_moments=moments,
+        has_evaluations=bool(evaluations),
     )
 
 

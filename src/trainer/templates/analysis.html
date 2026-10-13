@@ -58,17 +58,21 @@
         {{ board(analysis.evaluations[0].fen if analysis.evaluations else "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "Initial chess position") }}
         <section>
           <h2>Critical Moments</h2>
-          {% for moment in analysis.critical_moments %}
-            <article class="moment" data-position="{{ moment.position_fen }}">
-              <h3>{{ moment.classification }}</h3>
-              {{ board(moment.position_fen, "Position before " ~ moment.played) }}
-              <p>Played: {{ moment.played }}</p>
-              <p>Best: {{ moment.best }}</p>
-              <p>Win%: {{ moment.win_before }} → {{ moment.win_after }}</p>
-            </article>
+          {% if analysis.has_evaluations %}
+            {% for moment in analysis.critical_moments %}
+              <article class="moment" data-position="{{ moment.position_fen }}">
+                <h3>{{ moment.classification }}</h3>
+                {{ board(moment.position_fen, "Position before " ~ moment.played) }}
+                <p>Played: {{ moment.played }}</p>
+                <p>Best: {{ moment.best }}</p>
+                <p>Win%: {{ moment.win_before }} → {{ moment.win_after }}</p>
+              </article>
+            {% else %}
+              <p>No Critical Moments for the Player.</p>
+            {% endfor %}
           {% else %}
-            <p>No Critical Moments for the Player.</p>
-          {% endfor %}
+            <p>No server evaluation is available for this Game.</p>
+          {% endif %}
         </section>
       </div>
     </main>

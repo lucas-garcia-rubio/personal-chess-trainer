@@ -142,6 +142,73 @@ def test_missing_stockfish_does_not_affect_sync_home_or_persisted_analysis(
     assert "Analysis vs TryingHard87" in analysis.text
 
 
+def test_sync_preserves_evaluated_and_unevaluated_games_for_offline_use(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    evaluated = json.loads(lichess_mock.fixture)
+    unevaluated = json.loads(lichess_mock.fixture)
+    unevaluated["id"] = "without-evaluations"
+    unevaluated["createdAt"] = evaluated["createdAt"] + 1
+    unevaluated["players"]["black"]["user"]["name"] = "Casual Opponent"
+    del unevaluated["analysis"]
+    unevaluated_document = json.dumps(unevaluated)
+    settings = migrated_settings("Lance5500")
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.games_for(
+            "Lance5500",
+            ndjson=f"{unevaluated_document}\n{lichess_mock.fixture.strip()}",
+        ),
+        position_evaluator=UnusedLocalEvaluator(),
+    )
+
+    with TestClient(app) as client:
+        synced = client.post("/sync", follow_redirects=True)
+
+    assert synced.status_code == 200
+    assert "TryingHard87" in synced.text
+    assert "Casual Opponent" in synced.text
+    with sqlite3.connect(settings.database_path) as database:
+        stored = database.execute(
+            """
+            SELECT raw_document, analysis_document
+            FROM games WHERE origin_id = ?
+            """,
+            ("without-evaluations",),
+        ).fetchone()
+    assert stored is not None
+    assert stored[0] == unevaluated_document
+    empty_analysis = json.loads(stored[1])
+    assert empty_analysis["has_evaluations"] is False
+    assert empty_analysis["critical_moments"] == []
+
+    reopened_app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "persisted Games and Analyses must remain available offline"
+        ),
+    )
+    with TestClient(reopened_app) as client:
+        reopened_home = client.get("/")
+        evaluated_analysis = client.get("/analyses/lichess/q7ZvsdUF")
+        empty_analysis_page = client.get(
+            "/analyses/lichess/without-evaluations"
+        )
+
+    assert reopened_home.status_code == 200
+    assert "TryingHard87" in reopened_home.text
+    assert "Casual Opponent" in reopened_home.text
+    assert evaluated_analysis.status_code == 200
+    assert "Played: Qf3" in evaluated_analysis.text
+    assert empty_analysis_page.status_code == 200
+    assert (
+        "No server evaluation is available for this Game."
+        in empty_analysis_page.text
+    )
+    assert '<article class="moment"' not in empty_analysis_page.text
+
+
 def test_sync_ignores_whitespace_around_the_lichess_document(
     migrated_settings: Callable[[str], Settings],
     lichess_mock: LichessMock,
