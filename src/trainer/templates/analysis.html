@@ -1,8 +1,5 @@
 <!doctype html>
 <html lang="en">
-  {% macro board(fen, label) -%}
-    <div class="board" aria-label="{{ label }}" data-fen="{{ fen }}" data-orientation="{{ analysis.player_color }}"></div>
-  {%- endmacro %}
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -36,6 +33,25 @@
         max-width: 32rem;
         aspect-ratio: 1;
       }
+      .board-panel { min-width: 0; }
+      .board-controls {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 0.75rem;
+        align-items: center;
+        max-width: 32rem;
+        margin-top: 0.75rem;
+      }
+      .board-controls output { text-align: center; }
+      button {
+        padding: 0.6rem 0.85rem;
+        border: 1px solid #665d50;
+        border-radius: 0.25rem;
+        background: #302a23;
+        color: inherit;
+        cursor: pointer;
+      }
+      button:disabled { cursor: not-allowed; opacity: 0.45; }
       .moment {
         box-sizing: border-box;
         min-width: 0;
@@ -43,6 +59,22 @@
         border-left: 0.3rem solid #d66a4a;
         background: #24201b;
       }
+      .moment + .moment { margin-top: 0.75rem; }
+      .moment.is-selected { background: #342c22; }
+      .moment button { width: 100%; text-align: left; }
+      .moment button span { display: block; }
+      .moment-title { margin-bottom: 0.5rem; font-size: 1.1rem; }
+      .highlight-key { display: flex; gap: 1rem; margin: 0.75rem 0; }
+      [data-brush]::before {
+        content: "";
+        display: inline-block;
+        width: 0.75rem;
+        height: 0.75rem;
+        margin-right: 0.35rem;
+        border-radius: 50%;
+      }
+      [data-brush="red"]::before { background: #d85040; }
+      [data-brush="green"]::before { background: #629924; }
       .layout > section { min-width: 0; }
       @media (max-width: 48rem) {
         .layout { grid-template-columns: 1fr; }
@@ -55,17 +87,29 @@
       <h1>Analysis vs {{ analysis.opponent }}</h1>
       <p>{{ analysis.result }} · {{ analysis.speed }} · {{ analysis.time_control }}</p>
       <div class="layout">
-        {{ board(analysis.evaluations[0].fen if analysis.evaluations else "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "Initial chess position") }}
+        <section class="board-panel">
+          <div class="board" aria-label="Game position" data-orientation="{{ analysis.player_color }}"></div>
+          <div class="board-controls" aria-label="Game navigation">
+            <button type="button" data-direction="previous" disabled>← Previous</button>
+            <output aria-live="polite">Start</output>
+            <button type="button" data-direction="next">Next →</button>
+          </div>
+          <div class="highlight-key" aria-label="Move highlight legend">
+            <span data-brush="red">Played</span>
+            <span data-brush="green">Best</span>
+          </div>
+        </section>
         <section>
           <h2>Critical Moments</h2>
           {% if analysis.has_evaluations %}
             {% for moment in analysis.critical_moments %}
-              <article class="moment" data-position="{{ moment.position_fen }}">
-                <h3>{{ moment.classification }}</h3>
-                {{ board(moment.position_fen, "Position before " ~ moment.played) }}
-                <p>Played: {{ moment.played }}</p>
-                <p>Best: {{ moment.best }}</p>
-                <p>Win%: {{ moment.win_before }} → {{ moment.win_after }}</p>
+              <article class="moment" data-position-index="{{ moment.ply - 1 }}">
+                <button type="button" aria-pressed="false">
+                  <strong class="moment-title">{{ moment.classification }}</strong>
+                  <span>Played: {{ moment.played }}</span>
+                  <span>Best: {{ moment.best }}</span>
+                  <span>Win%: {{ moment.win_before }} → {{ moment.win_after }}</span>
+                </button>
               </article>
             {% else %}
               <p>No Critical Moments for the Player.</p>
@@ -76,17 +120,65 @@
         </section>
       </div>
     </main>
+    <script id="analysis-navigation" type="application/json">{{ navigation | tojson }}</script>
     <script type="module">
       import { Chessground } from "https://cdn.jsdelivr.net/npm/@lichess-org/chessground@10.4.2/+esm";
 
-      for (const element of document.querySelectorAll(".board")) {
-        Chessground(element, {
-          fen: element.dataset.fen,
-          orientation: element.dataset.orientation,
-          coordinates: false,
-          movable: { color: "both", free: true },
-        });
+      const navigation = JSON.parse(document.querySelector("#analysis-navigation").textContent);
+      const board = document.querySelector(".board");
+      const previous = document.querySelector('[data-direction="previous"]');
+      const next = document.querySelector('[data-direction="next"]');
+      const status = document.querySelector(".board-controls output");
+      const moments = [...document.querySelectorAll(".moment")];
+      let currentIndex = 0;
+
+      const ground = Chessground(board, {
+        fen: navigation.positions[0].fen,
+        orientation: board.dataset.orientation,
+        coordinates: false,
+        movable: { color: "both", free: true },
+      });
+
+      function squares(uci) {
+        return [uci.slice(0, 2), uci.slice(2, 4)];
       }
+
+      function showPosition(index) {
+        currentIndex = Math.max(0, Math.min(index, navigation.positions.length - 1));
+        const position = navigation.positions[currentIndex];
+        const highlights = navigation.moments[String(currentIndex)];
+        ground.set({
+          fen: position.fen,
+          lastMove: highlights || !position.lastMove ? undefined : squares(position.lastMove),
+        });
+        const shapes = highlights
+          ? [
+              { orig: squares(highlights.played)[0], dest: squares(highlights.played)[1], brush: "red" },
+              { orig: squares(highlights.best)[0], dest: squares(highlights.best)[1], brush: "green" },
+            ]
+          : [];
+        ground.setAutoShapes(shapes);
+        previous.disabled = currentIndex === 0;
+        next.disabled = currentIndex === navigation.positions.length - 1;
+        status.value = currentIndex === 0
+          ? "Start"
+          : `Ply ${currentIndex} of ${navigation.positions.length - 1}`;
+        for (const moment of moments) {
+          const selected = Number(moment.dataset.positionIndex) === currentIndex;
+          moment.classList.toggle("is-selected", selected);
+          moment.querySelector("button").setAttribute("aria-pressed", String(selected));
+        }
+      }
+
+      previous.addEventListener("click", () => showPosition(currentIndex - 1));
+      next.addEventListener("click", () => showPosition(currentIndex + 1));
+      for (const moment of moments) {
+        moment.querySelector("button").addEventListener(
+          "click",
+          () => showPosition(Number(moment.dataset.positionIndex)),
+        );
+      }
+      showPosition(0);
     </script>
   </body>
 </html>

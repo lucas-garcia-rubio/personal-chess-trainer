@@ -881,7 +881,8 @@ def test_import_honors_a_setup_position_and_only_analyzes_the_main_line(
     assert "Played: e5" in response.text
     assert "Best: c5" in response.text
     assert 'data-orientation="black"' in response.text
-    assert f'data-position="{evaluator.positions[0]}"' in response.text
+    assert evaluator.positions[0] in response.text
+    assert 'data-position-index="0"' in response.text
     with sqlite3.connect(settings.database_path) as database:
         raw_document = database.execute(
             "SELECT raw_document FROM games"

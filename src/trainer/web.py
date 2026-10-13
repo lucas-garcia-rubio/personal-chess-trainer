@@ -1,8 +1,11 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import json
 from pathlib import Path
+from typing import TypedDict, cast
 from urllib.parse import parse_qs
 
+import chess
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -14,8 +17,49 @@ from trainer.application.import_game import (
     ImportValidationError,
 )
 from trainer.application.sync import SyncGames
+from trainer.domain import Analysis
 
 _templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+
+
+class _NavigationPosition(TypedDict):
+    fen: str
+    lastMove: str | None
+
+
+class _MomentHighlights(TypedDict):
+    played: str
+    best: str
+
+
+class _AnalysisNavigation(TypedDict):
+    positions: list[_NavigationPosition]
+    moments: dict[str, _MomentHighlights]
+
+
+def _build_analysis_navigation(
+    canonical_document: str, analysis: Analysis
+) -> _AnalysisNavigation:
+    game = cast(list[str], json.loads(canonical_document))
+    board = chess.Board(game[0])
+    positions: list[_NavigationPosition] = [
+        {"fen": board.fen(), "lastMove": None}
+    ]
+    highlights: dict[str, _MomentHighlights] = {}
+    moments_by_ply = {moment.ply: moment for moment in analysis.critical_moments}
+
+    for ply, san in enumerate(game[1].split(), start=1):
+        move = board.parse_san(san)
+        moment = moments_by_ply.get(ply)
+        if moment is not None:
+            highlights[str(ply - 1)] = {
+                "played": move.uci(),
+                "best": board.parse_san(moment.best).uci(),
+            }
+        board.push(move)
+        positions.append({"fen": board.fen(), "lastMove": move.uci()})
+
+    return {"positions": positions, "moments": highlights}
 
 
 def create_web_app(
@@ -74,10 +118,18 @@ def create_web_app(
         stored_analysis = storage.get_analysis(origin, origin_id)
         if stored_analysis is None:
             raise HTTPException(status_code=404, detail="Analysis not found")
+        canonical_document = storage.get_canonical_document(origin, origin_id)
+        if canonical_document is None:
+            raise HTTPException(status_code=404, detail="Game not found")
         return _templates.TemplateResponse(
             request,
             "analysis.html",
-            {"analysis": stored_analysis},
+            {
+                "analysis": stored_analysis,
+                "navigation": _build_analysis_navigation(
+                    canonical_document, stored_analysis
+                ),
+            },
         )
 
     @app.get("/analyses/{origin}/{origin_id}", response_class=HTMLResponse)

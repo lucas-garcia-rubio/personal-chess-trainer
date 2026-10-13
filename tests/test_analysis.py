@@ -1,6 +1,9 @@
 from collections.abc import Callable
+from html import unescape
 import json
 from pathlib import Path
+import re
+from typing import cast
 
 from fastapi.testclient import TestClient
 
@@ -11,6 +14,16 @@ from trainer.config import Settings
 
 def _fixture(name: str) -> str:
     return (Path(__file__).parent / "fixtures" / name).read_text(encoding="utf-8")
+
+
+def _navigation_data(html: str) -> dict[str, object]:
+    match = re.search(
+        r'<script id="analysis-navigation" type="application/json">(.*?)</script>',
+        html,
+        re.DOTALL,
+    )
+    assert match is not None
+    return cast(dict[str, object], json.loads(unescape(match.group(1))))
 
 
 def test_analysis_shows_initial_board_and_player_critical_moment(
@@ -39,22 +52,73 @@ def test_analysis_shows_initial_board_and_player_critical_moment(
     assert "@lichess-org/chessground@10.4.2/assets/chessground.brown.css" in response.text
     assert "@lichess-org/chessground@10.4.2/assets/chessground.cburnett.css" in response.text
     assert "@lichess-org/chessground@10.4.2/+esm" in response.text
-    assert "Chessground(element" in response.text
+    assert "Chessground(board" in response.text
     assert "coordinates: false" in response.text
-    assert "<span>" not in response.text
-    assert (
-        'data-fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"'
-        in response.text
+    navigation = _navigation_data(response.text)
+    positions = navigation["positions"]
+    assert isinstance(positions, list)
+    assert positions[0]["fen"] == (
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
     )
-    assert (
-        'data-position="r3kb1r/pp2nppp/q7/4N3/3P4/8/PP2QPPP/R1B1K2R w KQ - 4 14"'
-        in response.text
+    assert positions[26]["fen"] == (
+        "r3kb1r/pp2nppp/q7/4N3/3P4/8/PP2QPPP/R1B1K2R w KQ - 4 14"
     )
-    assert 'aria-label="Position before Qf3"' in response.text
+    assert 'data-position-index="26"' in response.text
     assert "Played: Qf3" in response.text
     assert "Best: Nd3" in response.text
     assert "Mistake" in response.text
     assert "Win%: 66.8 → 54.0" in response.text
+
+
+def test_analysis_delivers_one_navigable_board_with_every_game_position(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    app = create_app(
+        migrated_settings("Lance5500"),
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+    )
+    with TestClient(app) as client:
+        client.post("/sync")
+        response = client.get("/analyses/q7ZvsdUF")
+
+    navigation = _navigation_data(response.text)
+    positions = navigation["positions"]
+    assert isinstance(positions, list)
+    assert response.text.count('class="board"') == 1
+    assert positions[0] == {
+        "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        "lastMove": None,
+    }
+    assert positions[1] == {
+        "fen": "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1",
+        "lastMove": "d2d4",
+    }
+    assert len(positions) == 126
+    assert '<button type="button" data-direction="previous" disabled>' in response.text
+    assert '<button type="button" data-direction="next">' in response.text
+
+
+def test_selecting_a_critical_moment_targets_its_pre_move_position_and_highlights(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    app = create_app(
+        migrated_settings("Lance5500"),
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+    )
+    with TestClient(app) as client:
+        client.post("/sync")
+        response = client.get("/analyses/q7ZvsdUF")
+
+    navigation = _navigation_data(response.text)
+    moments = navigation["moments"]
+    assert isinstance(moments, dict)
+    assert moments["26"] == {"played": "e2f3", "best": "e5d3"}
+    assert 'class="moment" data-position-index="26"' in response.text
+    assert 'data-brush="red"' in response.text
+    assert 'data-brush="green"' in response.text
+    assert "ground.setAutoShapes(shapes)" in response.text
 
 
 def test_analysis_classifies_from_evaluations_not_lichess_judgment(
@@ -100,9 +164,9 @@ def test_analysis_classifies_player_drops_around_winning_chance_thresholds(
 
     assert response.status_code == 200
     assert response.text.count('<article class="moment"') == 5
-    assert response.text.count("<h3>Inaccuracy</h3>") == 2
-    assert response.text.count("<h3>Mistake</h3>") == 2
-    assert response.text.count("<h3>Blunder</h3>") == 1
+    assert response.text.count('class="moment-title">Inaccuracy</strong>') == 2
+    assert response.text.count('class="moment-title">Mistake</strong>') == 2
+    assert response.text.count('class="moment-title">Blunder</strong>') == 1
     assert "Played: e5" not in response.text  # 0.0999994, immediately below 0.1
     assert "Played: Nc6" in response.text  # 0.1000048, immediately above 0.1
     assert "Played: a6" in response.text  # 0.1999984, immediately below 0.2
@@ -139,9 +203,9 @@ def test_analysis_classifies_lichess_mate_transitions(
 
     assert response.status_code == 200
     assert response.text.count('<article class="moment"') == 7
-    assert response.text.count("<h3>Inaccuracy</h3>") == 2
-    assert response.text.count("<h3>Mistake</h3>") == 2
-    assert response.text.count("<h3>Blunder</h3>") == 3
+    assert response.text.count('class="moment-title">Inaccuracy</strong>') == 2
+    assert response.text.count('class="moment-title">Mistake</strong>') == 2
+    assert response.text.count('class="moment-title">Blunder</strong>') == 3
     assert "Played: Nf3" in response.text  # cp -1000 to being mated
     assert "Played: Bb5" in response.text  # cp -701 to being mated
     assert "Played: Ba4" in response.text  # cp -700 to being mated
