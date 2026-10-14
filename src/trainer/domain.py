@@ -151,6 +151,28 @@ class GameSummary:
     critical_count: int
 
 
+@dataclass(frozen=True)
+class DiscussionMessage:
+    author: Literal["player", "trainer"]
+    body: str
+
+
+@dataclass(frozen=True)
+class VariationMove:
+    author: Literal["player", "trainer", "evaluator"]
+    uci: str
+    san: str
+    resulting_fen: str
+
+
+@dataclass(frozen=True)
+class Discussion:
+    base_ply: int
+    base_fen: str
+    messages: list[DiscussionMessage]
+    moves: list[VariationMove]
+
+
 HeaderValue: TypeAlias = str
 
 

@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from typing import Protocol
 
-from trainer.domain import Analysis, EvaluationRun, GameMetadata, GameSummary
+from trainer.domain import Analysis, Discussion, EvaluationRun, GameMetadata, GameSummary
 
 
 class GameIdentityConflict(RuntimeError):
@@ -31,5 +31,11 @@ class LocalStorage(Protocol):
     def list_games(self) -> list[GameSummary]: ...
 
     def get_analysis(self, origin: str, origin_id: str) -> Analysis | None: ...
+
+    def list_discussions(self, origin: str, origin_id: str) -> list[Discussion]: ...
+
+    def create_discussion(
+        self, origin: str, origin_id: str, discussion: Discussion
+    ) -> None: ...
 
     def close(self) -> None: ...

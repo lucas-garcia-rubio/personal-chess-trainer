@@ -5,6 +5,7 @@ from trainer.adapters.lichess import LichessGameSource
 from trainer.adapters.sqlite import SQLiteStorage
 from trainer.adapters.stockfish import StockfishEvaluator
 from trainer.application.import_game import ImportGame
+from trainer.application.discussions import StartDiscussion
 from trainer.application.ports import PositionEvaluator
 from trainer.application.sync import SyncGames
 from trainer.config import Settings
@@ -34,4 +35,10 @@ def create_app(
         settings.lichess_username,
         max_plies=settings.engine.max_plies,
     )
-    return create_web_app(storage, game_source, sync_games, import_game)
+    return create_web_app(
+        storage,
+        game_source,
+        sync_games,
+        import_game,
+        StartDiscussion(storage),
+    )

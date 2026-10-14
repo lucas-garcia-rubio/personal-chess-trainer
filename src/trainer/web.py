@@ -16,8 +16,9 @@ from trainer.application.import_game import (
     ImportGame,
     ImportValidationError,
 )
+from trainer.application.discussions import DiscussionValidationError, StartDiscussion
 from trainer.application.sync import SyncGames
-from trainer.domain import Analysis, win_percent
+from trainer.domain import Analysis, Discussion, win_percent
 
 _templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
@@ -41,6 +42,25 @@ class _AnalysisNavigation(TypedDict):
     positions: list[_NavigationPosition]
     moments: dict[str, _MomentHighlights]
     evaluations: list[_EvaluationPoint]
+
+
+def _discussion_document(discussion: Discussion) -> dict[str, object]:
+    return {
+        "baseFen": discussion.base_fen,
+        "messages": [
+            {"author": message.author, "body": message.body}
+            for message in discussion.messages
+        ],
+        "moves": [
+            {
+                "author": move.author,
+                "uci": move.uci,
+                "san": move.san,
+                "fen": move.resulting_fen,
+            }
+            for move in discussion.moves
+        ],
+    }
 
 
 def _build_analysis_navigation(
@@ -100,6 +120,7 @@ def create_web_app(
     game_source: GameSource,
     sync_games: SyncGames,
     import_game: ImportGame,
+    start_discussion: StartDiscussion,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -159,15 +180,52 @@ def create_web_app(
             "analysis.html",
             {
                 "analysis": stored_analysis,
+                "origin": origin,
+                "origin_id": origin_id,
                 "navigation": _build_analysis_navigation(
                     canonical_document, stored_analysis
                 ),
+                "trainer_data": {
+                    "discussions": {
+                        str(discussion.base_ply): _discussion_document(discussion)
+                        for discussion in storage.list_discussions(origin, origin_id)
+                    }
+                },
             },
         )
 
     @app.get("/analyses/{origin}/{origin_id}", response_class=HTMLResponse)
     def analysis(request: Request, origin: str, origin_id: str) -> Response:
         return render_analysis(request, origin, origin_id)
+
+    @app.post("/analyses/{origin}/{origin_id}/discussions")
+    async def create_discussion(
+        request: Request, origin: str, origin_id: str
+    ) -> Response:
+        fields = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
+        try:
+            base_ply = int(fields.get("base_ply", [""])[0])
+            initial_moves_document = json.loads(
+                fields.get("initial_moves", ["[]"])[0]
+            )
+            if not isinstance(initial_moves_document, list) or not all(
+                isinstance(move, str) for move in initial_moves_document
+            ):
+                raise ValueError
+            start_discussion(
+                origin=origin,
+                origin_id=origin_id,
+                base_ply=base_ply,
+                message=fields.get("message", [""])[0],
+                initial_moves=initial_moves_document,
+            )
+        except (ValueError, json.JSONDecodeError, DiscussionValidationError) as error:
+            detail = str(error) or "Invalid Discussion"
+            raise HTTPException(status_code=422, detail=detail) from error
+        return RedirectResponse(
+            f"/analyses/{origin}/{origin_id}?trainer=1&ply={base_ply}",
+            status_code=303,
+        )
 
     @app.get("/analyses/{source_id}", response_class=HTMLResponse)
     def legacy_lichess_analysis(request: Request, source_id: str) -> Response:
