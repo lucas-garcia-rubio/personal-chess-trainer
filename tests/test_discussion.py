@@ -193,3 +193,87 @@ def test_repeated_positions_at_different_game_plies_have_separate_discussions(
     assert str(discussions["0"]["baseFen"]).split()[:4] == str(
         discussions["4"]["baseFen"]
     ).split()[:4]
+
+
+def test_player_continues_a_discussion_and_reopens_its_active_position(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    settings = migrated_settings("Lance5500")
+    app = create_app(
+        settings,
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+    )
+    with TestClient(app) as client:
+        client.post("/sync")
+        client.post(
+            "/analyses/lichess/q7ZvsdUF/discussions",
+            data={
+                "base_ply": "0",
+                "message": "Let me calculate from here.",
+                "initial_moves": json.dumps(["e2e4"]),
+            },
+        )
+        continued = client.post(
+            "/analyses/lichess/q7ZvsdUF/discussions/0/moves",
+            json={"uci": "e7e5"},
+        )
+
+    assert continued.status_code == 200
+    assert continued.json()["moves"][-1] == {
+        "author": "player",
+        "uci": "e7e5",
+        "san": "e5",
+        "fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+    }
+    assert continued.json()["activeFen"] == (
+        "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
+    )
+
+    reopened_app = create_app(
+        settings,
+        lichess_transport=lichess_mock.fail_on_request(
+            "a continued Discussion must reopen offline"
+        ),
+    )
+    with TestClient(reopened_app) as client:
+        reopened = client.get("/analyses/lichess/q7ZvsdUF?trainer=1&ply=0")
+
+    discussion = cast(
+        dict[str, dict[str, object]], _trainer_data(reopened.text)["discussions"]
+    )["0"]
+    assert discussion["activeFen"] == continued.json()["activeFen"]
+    assert discussion["moves"] == continued.json()["moves"]
+    assert 'data-navigation-mode="game"' in reopened.text
+    assert 'data-navigation-mode="discussion"' in reopened.text
+    assert "Discussion · ${currentIndex} of ${positions.length - 1}" in reopened.text
+
+
+def test_illegal_player_move_leaves_the_discussion_unchanged(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    app = create_app(
+        migrated_settings("Lance5500"),
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+    )
+    with TestClient(app) as client:
+        client.post("/sync")
+        client.post(
+            "/analyses/lichess/q7ZvsdUF/discussions",
+            data={
+                "base_ply": "0",
+                "message": "Let me calculate from here.",
+                "initial_moves": json.dumps(["e2e4"]),
+            },
+        )
+        before = client.get("/analyses/lichess/q7ZvsdUF")
+        rejected = client.post(
+            "/analyses/lichess/q7ZvsdUF/discussions/0/moves",
+            json={"uci": "e2e5"},
+        )
+        after = client.get("/analyses/lichess/q7ZvsdUF")
+
+    assert rejected.status_code == 422
+    assert rejected.json() == {"detail": "Move is illegal at the active Position"}
+    assert _trainer_data(after.text) == _trainer_data(before.text)

@@ -17,7 +17,11 @@ from trainer.application.import_game import (
     ImportGame,
     ImportValidationError,
 )
-from trainer.application.discussions import DiscussionValidationError, StartDiscussion
+from trainer.application.discussions import (
+    ContinueDiscussion,
+    DiscussionValidationError,
+    StartDiscussion,
+)
 from trainer.application.sync import SyncGames
 from trainer.domain import Analysis, Discussion, win_percent
 
@@ -48,6 +52,11 @@ class _AnalysisNavigation(TypedDict):
 def _discussion_document(discussion: Discussion) -> dict[str, object]:
     return {
         "baseFen": discussion.base_fen,
+        "activeFen": (
+            discussion.moves[-1].resulting_fen
+            if discussion.moves
+            else discussion.base_fen
+        ),
         "messages": [
             {"author": message.author, "body": message.body}
             for message in discussion.messages
@@ -66,6 +75,10 @@ def _discussion_document(discussion: Discussion) -> dict[str, object]:
 
 class _BestLineRequest(BaseModel):
     ply: int
+
+
+class _PlayerMoveRequest(BaseModel):
+    uci: str
 
 
 class _PreviewMove(TypedDict):
@@ -187,6 +200,7 @@ def create_web_app(
     sync_games: SyncGames,
     import_game: ImportGame,
     start_discussion: StartDiscussion,
+    continue_discussion: ContinueDiscussion,
     candidate_evaluator: CandidateEvaluator | None = None,
 ) -> FastAPI:
     @asynccontextmanager
@@ -322,6 +336,24 @@ def create_web_app(
             candidate_evaluator,
             selection.ply,
         )
+
+    @app.post("/analyses/{origin}/{origin_id}/discussions/{base_ply}/moves")
+    def continue_existing_discussion(
+        origin: str,
+        origin_id: str,
+        base_ply: int,
+        selection: _PlayerMoveRequest,
+    ) -> dict[str, object]:
+        try:
+            discussion = continue_discussion(
+                origin=origin,
+                origin_id=origin_id,
+                base_ply=base_ply,
+                uci=selection.uci,
+            )
+        except DiscussionValidationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return _discussion_document(discussion)
 
     @app.get("/analyses/{source_id}", response_class=HTMLResponse)
     def legacy_lichess_analysis(request: Request, source_id: str) -> Response:
