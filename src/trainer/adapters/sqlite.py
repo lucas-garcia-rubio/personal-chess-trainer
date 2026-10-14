@@ -1,18 +1,21 @@
 import sqlite3
 from pathlib import Path
 import json
-from typing import cast
+from typing import Literal, cast
 
 from trainer.application.ports import GameIdentityConflict
 from trainer.domain import (
     Analysis,
     CriticalMoment,
+    Discussion,
+    DiscussionMessage,
     EvaluatorProvenance,
     GameMetadata,
     GameSummary,
     EvaluationScore,
     PositionEvaluation,
     ScoreKind,
+    VariationMove,
 )
 
 
@@ -21,6 +24,7 @@ class SQLiteStorage:
         self._connection = sqlite3.connect(path, check_same_thread=False)
         self._connection.execute("PRAGMA journal_mode = WAL")
         self._connection.execute("PRAGMA busy_timeout = 5000")
+        self._connection.execute("PRAGMA foreign_keys = ON")
 
     def save_game(
         self, raw_document: str, metadata: GameMetadata, analysis: Analysis
@@ -172,6 +176,109 @@ class SQLiteStorage:
             has_evaluations=cast(bool, document.get("has_evaluations", True)),
             evaluations=evaluations,
         )
+
+    def list_discussions(self, origin: str, origin_id: str) -> list[Discussion]:
+        rows = self._connection.execute(
+            """
+            SELECT id, base_ply, base_fen
+            FROM discussions
+            WHERE game_origin = ? AND game_origin_id = ?
+            ORDER BY base_ply
+            """,
+            (origin, origin_id),
+        ).fetchall()
+        discussions: list[Discussion] = []
+        for discussion_id, base_ply, base_fen in rows:
+            message_rows = self._connection.execute(
+                """
+                SELECT author, body FROM discussion_messages
+                WHERE discussion_id = ? ORDER BY id
+                """,
+                (discussion_id,),
+            ).fetchall()
+            move_rows = self._connection.execute(
+                """
+                SELECT author, move_uci, move_san, resulting_fen
+                FROM variation_nodes
+                WHERE discussion_id = ? ORDER BY id
+                """,
+                (discussion_id,),
+            ).fetchall()
+            discussions.append(
+                Discussion(
+                    base_ply=cast(int, base_ply),
+                    base_fen=cast(str, base_fen),
+                    messages=[
+                        DiscussionMessage(
+                            author=cast(Literal["player", "trainer"], author),
+                            body=cast(str, body),
+                        )
+                        for author, body in message_rows
+                    ],
+                    moves=[
+                        VariationMove(
+                            author=cast(
+                                Literal["player", "trainer", "evaluator"], author
+                            ),
+                            uci=cast(str, uci),
+                            san=cast(str, san),
+                            resulting_fen=cast(str, resulting_fen),
+                        )
+                        for author, uci, san, resulting_fen in move_rows
+                    ],
+                )
+            )
+        return discussions
+
+    def create_discussion(
+        self, origin: str, origin_id: str, discussion: Discussion
+    ) -> None:
+        with self._connection:
+            inserted = self._connection.execute(
+                """
+                INSERT INTO discussions (
+                    game_origin, game_origin_id, base_ply, base_fen
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(game_origin, game_origin_id, base_ply) DO NOTHING
+                """,
+                (origin, origin_id, discussion.base_ply, discussion.base_fen),
+            )
+            if inserted.rowcount == 0:
+                return
+            discussion_id = inserted.lastrowid
+            assert discussion_id is not None
+            for message in discussion.messages:
+                self._connection.execute(
+                    """
+                    INSERT INTO discussion_messages (discussion_id, author, body)
+                    VALUES (?, ?, ?)
+                    """,
+                    (discussion_id, message.author, message.body),
+                )
+            parent_id: int | None = None
+            for move in discussion.moves:
+                node = self._connection.execute(
+                    """
+                    INSERT INTO variation_nodes (
+                        discussion_id, parent_id, author, move_uci, move_san,
+                        resulting_fen
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        discussion_id,
+                        parent_id,
+                        move.author,
+                        move.uci,
+                        move.san,
+                        move.resulting_fen,
+                    ),
+                )
+                parent_id = node.lastrowid
+            if parent_id is not None:
+                self._connection.execute(
+                    "UPDATE discussions SET active_node_id = ? WHERE id = ?",
+                    (parent_id, discussion_id),
+                )
 
     def close(self) -> None:
         self._connection.close()
