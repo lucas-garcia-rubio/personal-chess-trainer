@@ -50,6 +50,17 @@ class StockfishEvaluator:
             evaluations = [session.evaluate(fen) for fen in positions]
         return EvaluationRun(provenance=provenance, evaluations=evaluations)
 
+    def evaluate_candidates(
+        self, position: str, max_candidates: int
+    ) -> EvaluationRun:
+        if max_candidates < 1 or max_candidates > 3:
+            raise ValueError("Candidate evaluations are limited to between 1 and 3.")
+        deadline = time.monotonic() + self._settings.timeout_seconds
+        with _UciSession(self._command(), self._settings, deadline) as session:
+            evaluations = session.evaluate_candidates(position, max_candidates)
+            provenance = session.provenance(multi_pv=max_candidates)
+        return EvaluationRun(provenance=provenance, evaluations=evaluations)
+
     def _command(self) -> list[str]:
         executable = self._settings.executable
         if executable is None:
@@ -124,17 +135,20 @@ class _UciSession:
         while self._read("readyok") != "readyok":
             pass
 
-    def provenance(self) -> EvaluatorProvenance:
+    def provenance(self, *, multi_pv: int | None = None) -> EvaluatorProvenance:
         name = self._engine_name if self._engine_name is not None else "unknown"
+        parameters: dict[str, int | str | float | bool] = {
+            "depth": self._settings.depth,
+            "threads": self._settings.threads,
+            "hash_mb": self._settings.hash_mb,
+        }
+        if multi_pv is not None:
+            parameters["multi_pv"] = multi_pv
         return EvaluatorProvenance(
             source_kind="local-engine",
             name=name,
             version=_detect_version(name),
-            parameters={
-                "depth": self._settings.depth,
-                "threads": self._settings.threads,
-                "hash_mb": self._settings.hash_mb,
-            },
+            parameters=parameters,
         )
 
     def evaluate(self, fen: str) -> PositionEvaluation:
@@ -171,6 +185,51 @@ class _UciSession:
             best_move=best_move,
             principal_variation=[] if variation is None else variation,
         )
+
+    def evaluate_candidates(
+        self, fen: str, max_candidates: int
+    ) -> list[PositionEvaluation]:
+        self._send(f"setoption name MultiPV value {max_candidates}")
+        self._send("isready")
+        while self._read("readyok") != "readyok":
+            pass
+        self._send(f"position fen {fen}")
+        self._send(f"go depth {self._settings.depth}")
+        scores: dict[int, EvaluationScore] = {}
+        variations: dict[int, list[str]] = {}
+        while True:
+            line = self._read(f"the candidate evaluation of {fen}")
+            if line.startswith("info"):
+                candidate = _multipv_index(line)
+                score, variation = _parse_info(line)
+                if score is not None:
+                    scores[candidate] = score
+                if variation is not None:
+                    variations[candidate] = variation
+            elif line.startswith("bestmove"):
+                break
+
+        evaluations: list[PositionEvaluation] = []
+        for candidate in range(1, max_candidates + 1):
+            score = scores.get(candidate)
+            variation = variations.get(candidate)
+            if score is None or not variation:
+                continue
+            _validate_uci_moves(fen, variation[0], variation)
+            value = -score.value if _black_to_move(fen) else score.value
+            evaluations.append(
+                PositionEvaluation(
+                    fen=fen,
+                    score=EvaluationScore(kind=score.kind, value=value),
+                    best_move=variation[0],
+                    principal_variation=variation,
+                )
+            )
+        if not evaluations:
+            raise StockfishError(
+                f"Stockfish reported no candidate lines for the position {fen}."
+            )
+        return evaluations
 
     def _send(self, command: str) -> None:
         stdin = cast(IO[str], self._process.stdin)
@@ -272,6 +331,15 @@ def _parse_info(line: str) -> tuple[EvaluationScore | None, list[str] | None]:
             break
         index += 1
     return score, variation
+
+
+def _multipv_index(line: str) -> int:
+    tokens = line.split()
+    try:
+        index = tokens.index("multipv")
+        return int(tokens[index + 1])
+    except (ValueError, IndexError):
+        return 1
 
 
 def _detect_version(name: str) -> str | None:

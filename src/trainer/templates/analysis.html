@@ -43,6 +43,23 @@
         margin-top: 0.75rem;
       }
       .board-controls output { text-align: center; }
+      .best-line-actions {
+        display: flex;
+        gap: 0.75rem;
+        max-width: 32rem;
+        margin-top: 0.75rem;
+      }
+      .best-line-preview {
+        max-width: 32rem;
+        margin-top: 0.75rem;
+        padding: 0.75rem;
+        border: 1px solid #dcb86b;
+        border-radius: 0.25rem;
+        background: #24201b;
+      }
+      .best-line-preview h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+      .best-line-preview p { margin: 0.35rem 0; }
+      .best-line-error { color: #f09a7f; }
       .evaluation-panel {
         max-width: 32rem;
         margin: 1.5rem 0 0;
@@ -125,6 +142,17 @@
             <output aria-live="polite">Start</output>
             <button type="button" data-direction="next">Next →</button>
           </div>
+          <div class="best-line-actions">
+            <button type="button" data-action="best-line"{% if best_line_unavailable_reason %} disabled{% endif %} data-url="{{ best_line_url }}">Show Best Line</button>
+            <button type="button" data-action="return-to-game" hidden>Return to Game</button>
+          </div>
+          <aside class="best-line-preview" hidden aria-live="polite">
+            <h2>Best Line preview</h2>
+            <p data-preview-score></p>
+            <p data-preview-moves></p>
+            <p data-preview-provenance></p>
+          </aside>
+          <p class="best-line-error" data-best-line-error{% if not best_line_unavailable_reason %} hidden{% endif %} aria-live="polite">{{ best_line_unavailable_reason or "" }}</p>
           <div class="highlight-key" aria-label="Move highlight legend">
             <span data-brush="red">Played</span>
             <span data-brush="green">Best</span>
@@ -173,7 +201,13 @@
       const next = document.querySelector('[data-direction="next"]');
       const status = document.querySelector(".board-controls output");
       const moments = [...document.querySelectorAll(".moment")];
+      const bestLineButton = document.querySelector('[data-action="best-line"]');
+      const returnToGameButton = document.querySelector('[data-action="return-to-game"]');
+      const previewPanel = document.querySelector(".best-line-preview");
+      const previewError = document.querySelector("[data-best-line-error]");
       let currentIndex = 0;
+      let gameIndex = 0;
+      let bestLinePreview = null;
       let chess = new Chess(navigation.positions[0].fen);
 
       function legalDests(game) {
@@ -224,9 +258,13 @@
       }
 
       function showPosition(index) {
-        currentIndex = Math.max(0, Math.min(index, navigation.positions.length - 1));
-        const position = navigation.positions[currentIndex];
-        const highlights = navigation.moments[String(currentIndex)];
+        const positions = bestLinePreview
+          ? [navigation.positions[bestLinePreview.basePly], ...bestLinePreview.moves.map((move) => ({ fen: move.fen, lastMove: move.uci }))]
+          : navigation.positions;
+        currentIndex = Math.max(0, Math.min(index, positions.length - 1));
+        if (!bestLinePreview) gameIndex = currentIndex;
+        const position = positions[currentIndex];
+        const highlights = bestLinePreview ? undefined : navigation.moments[String(currentIndex)];
         chess = new Chess(position.fen);
         ground.set({
           fen: position.fen,
@@ -242,21 +280,30 @@
           : [];
         ground.setAutoShapes(shapes);
         previous.disabled = currentIndex === 0;
-        next.disabled = currentIndex === navigation.positions.length - 1;
-        status.value = currentIndex === 0
-          ? "Start"
-          : `Ply ${currentIndex} of ${navigation.positions.length - 1}`;
+        next.disabled = currentIndex === positions.length - 1;
+        status.value = bestLinePreview
+          ? `Best Line preview · ${currentIndex} of ${positions.length - 1}`
+          : currentIndex === 0
+            ? "Start"
+            : `Ply ${currentIndex} of ${positions.length - 1}`;
         for (const moment of moments) {
-          const selected = Number(moment.dataset.positionIndex) === currentIndex;
+          const selected = !bestLinePreview && Number(moment.dataset.positionIndex) === currentIndex;
           moment.classList.toggle("is-selected", selected);
           moment.querySelector("button").setAttribute("aria-pressed", String(selected));
         }
         for (const point of document.querySelectorAll(".evaluation-point")) {
           point.classList.toggle(
             "is-selected",
-            Number(point.dataset.positionIndex) === currentIndex,
+            !bestLinePreview && Number(point.dataset.positionIndex) === currentIndex,
           );
         }
+      }
+
+      function showGamePosition(index) {
+        bestLinePreview = null;
+        previewPanel.hidden = true;
+        returnToGameButton.hidden = true;
+        showPosition(index);
       }
 
       function renderEvaluationCurve() {
@@ -285,11 +332,11 @@
             "aria-label",
             `${point.positionIndex === 0 ? "Start" : `Ply ${point.positionIndex}`}: ${point.winPercent}% Player Win`,
           );
-          marker.addEventListener("click", () => showPosition(point.positionIndex));
+          marker.addEventListener("click", () => showGamePosition(point.positionIndex));
           marker.addEventListener("keydown", (event) => {
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
-              showPosition(point.positionIndex);
+              showGamePosition(point.positionIndex);
             }
           });
           curve.append(marker);
@@ -298,10 +345,42 @@
 
       previous.addEventListener("click", () => showPosition(currentIndex - 1));
       next.addEventListener("click", () => showPosition(currentIndex + 1));
+      bestLineButton.addEventListener("click", async () => {
+        bestLineButton.disabled = true;
+        previewError.hidden = true;
+        try {
+          const response = await fetch(bestLineButton.dataset.url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ply: gameIndex }),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Best Line unavailable.");
+          bestLinePreview = result;
+          previewPanel.querySelector("[data-preview-score]").textContent =
+            `Player score: ${result.score.kind} ${result.score.value}`;
+          previewPanel.querySelector("[data-preview-moves]").textContent =
+            result.moves.map((move) => move.san).join(" ") || "No moves available.";
+          const parameters = Object.entries(result.provenance.parameters)
+            .map(([name, value]) => `${name}: ${value}`)
+            .join(", ");
+          previewPanel.querySelector("[data-preview-provenance]").textContent =
+            `Evaluator: ${result.provenance.name}${result.provenance.version ? ` ${result.provenance.version}` : ""} (${result.provenance.sourceKind}${parameters ? `; ${parameters}` : ""})`;
+          previewPanel.hidden = false;
+          returnToGameButton.hidden = false;
+          showPosition(0);
+        } catch (error) {
+          previewError.textContent = error.message;
+          previewError.hidden = false;
+          return;
+        }
+        bestLineButton.disabled = false;
+      });
+      returnToGameButton.addEventListener("click", () => showGamePosition(gameIndex));
       for (const moment of moments) {
         moment.querySelector("button").addEventListener(
           "click",
-          () => showPosition(Number(moment.dataset.positionIndex)),
+          () => showGamePosition(Number(moment.dataset.positionIndex)),
         );
       }
       renderEvaluationCurve();
