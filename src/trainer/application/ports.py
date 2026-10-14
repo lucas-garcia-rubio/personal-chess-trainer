@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from trainer.domain import Analysis, Discussion, EvaluationRun, GameMetadata, GameSummary
 
@@ -17,6 +17,13 @@ class GameSource(Protocol):
 
 class PositionEvaluator(Protocol):
     def evaluate_positions(self, positions: Sequence[str]) -> EvaluationRun: ...
+
+
+@runtime_checkable
+class CandidateEvaluator(Protocol):
+    def evaluate_candidates(
+        self, position: str, max_candidates: int
+    ) -> EvaluationRun: ...
 
 
 class LocalStorage(Protocol):

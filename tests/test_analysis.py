@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from html import unescape
 import json
 from pathlib import Path
@@ -10,6 +10,51 @@ from fastapi.testclient import TestClient
 from lichess_mock import LichessMock
 from trainer.bootstrap import create_app
 from trainer.config import Settings
+from trainer.domain import (
+    EvaluationRun,
+    EvaluationScore,
+    EvaluatorProvenance,
+    PositionEvaluation,
+)
+
+
+class DeterministicCandidateEvaluator:
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, int]] = []
+
+    def evaluate_candidates(self, position: str, max_candidates: int) -> EvaluationRun:
+        self.requests.append((position, max_candidates))
+        return EvaluationRun(
+            provenance=EvaluatorProvenance(
+                source_kind="test-double",
+                name="Deterministic Evaluator",
+                version="1.0",
+                parameters={"depth": 12, "multi_pv": max_candidates},
+            ),
+            evaluations=[
+                PositionEvaluation(
+                    fen=position,
+                    score=EvaluationScore(kind="cp", value=score),
+                    best_move=line[0],
+                    principal_variation=line,
+                )
+                for score, line in (
+                    (35, ["e2e4", "e7e5", "g1f3"]),
+                    (20, ["d2d4", "d7d5"]),
+                    (10, ["g1f3", "d7d5"]),
+                )
+            ],
+        )
+
+
+class PositionOnlyEvaluator:
+    def evaluate_positions(self, positions: Sequence[str]) -> EvaluationRun:
+        raise AssertionError("Sync must not use the local Evaluator")
+
+
+class FailingCandidateEvaluator:
+    def evaluate_candidates(self, position: str, max_candidates: int) -> EvaluationRun:
+        raise RuntimeError("engine process exited")
 
 
 def _fixture(name: str) -> str:
@@ -99,6 +144,130 @@ def test_analysis_delivers_one_navigable_board_with_every_game_position(
     assert '<button type="button" data-direction="next">' in response.text
 
 
+def test_analysis_previews_the_evaluators_best_line_for_the_selected_game_ply(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    evaluator = DeterministicCandidateEvaluator()
+    app = create_app(
+        migrated_settings("Lance5500"),
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+        candidate_evaluator=evaluator,
+    )
+    with TestClient(app) as client:
+        client.post("/sync")
+        analysis = client.get("/analyses/q7ZvsdUF")
+        preview = client.post(
+            "/analyses/lichess/q7ZvsdUF/best-line", json={"ply": 0}
+        )
+
+    assert analysis.status_code == 200
+    assert 'data-action="best-line"' in analysis.text
+    assert 'data-url="/analyses/lichess/q7ZvsdUF/best-line"' in analysis.text
+    assert "Best Line preview" in analysis.text
+    assert preview.status_code == 200
+    assert evaluator.requests == [
+        (
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            3,
+        )
+    ]
+    assert preview.json() == {
+        "label": "Best Line preview",
+        "basePly": 0,
+        "score": {"kind": "cp", "value": 35},
+        "moves": [
+            {
+                "uci": "e2e4",
+                "san": "e4",
+                "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+            },
+            {
+                "uci": "e7e5",
+                "san": "e5",
+                "fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+            },
+            {
+                "uci": "g1f3",
+                "san": "Nf3",
+                "fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",
+            },
+        ],
+        "provenance": {
+            "sourceKind": "test-double",
+            "name": "Deterministic Evaluator",
+            "version": "1.0",
+            "parameters": {"depth": 12, "multi_pv": 3},
+        },
+    }
+
+
+def test_analysis_disables_best_line_when_no_candidate_evaluator_is_available(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    app = create_app(
+        migrated_settings("Lance5500"),
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+        position_evaluator=PositionOnlyEvaluator(),
+    )
+    with TestClient(app) as client:
+        client.post("/sync")
+        analysis = client.get("/analyses/q7ZvsdUF")
+        preview = client.post(
+            "/analyses/lichess/q7ZvsdUF/best-line", json={"ply": 0}
+        )
+
+    assert analysis.status_code == 200
+    assert 'data-action="best-line" disabled' in analysis.text
+    assert "Best Line unavailable: no Evaluator is configured." in analysis.text
+    assert preview.status_code == 503
+    assert preview.json() == {
+        "detail": "Best Line unavailable: no Evaluator is configured."
+    }
+
+
+def test_best_line_score_is_normalized_to_the_black_players_point_of_view(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    evaluator = DeterministicCandidateEvaluator()
+    app = create_app(
+        migrated_settings("TryingHard87"),
+        lichess_transport=lichess_mock.games_for("TryingHard87"),
+        candidate_evaluator=evaluator,
+    )
+    with TestClient(app) as client:
+        client.post("/sync")
+        preview = client.post(
+            "/analyses/lichess/q7ZvsdUF/best-line", json={"ply": 0}
+        )
+
+    assert preview.status_code == 200
+    assert preview.json()["score"] == {"kind": "cp", "value": -35}
+
+
+def test_best_line_reports_evaluator_failure_without_a_fallback(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    app = create_app(
+        migrated_settings("Lance5500"),
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+        candidate_evaluator=FailingCandidateEvaluator(),
+    )
+    with TestClient(app) as client:
+        client.post("/sync")
+        preview = client.post(
+            "/analyses/lichess/q7ZvsdUF/best-line", json={"ply": 0}
+        )
+
+    assert preview.status_code == 503
+    assert preview.json() == {
+        "detail": "Best Line unavailable: engine process exited"
+    }
+
+
 def test_analysis_delivers_a_clickable_evaluation_curve_for_available_scores(
     migrated_settings: Callable[[str], Settings],
     lichess_mock: LichessMock,
@@ -130,7 +299,7 @@ def test_analysis_delivers_a_clickable_evaluation_curve_for_available_scores(
     assert len(evaluations) == 125
     assert '<svg class="evaluation-curve"' in response.text
     assert 'aria-label="Evaluation curve"' in response.text
-    assert "showPosition(point.positionIndex)" in response.text
+    assert "showGamePosition(point.positionIndex)" in response.text
 
 
 def test_analysis_allows_only_legal_client_side_variations_from_known_positions(
@@ -153,7 +322,10 @@ def test_analysis_allows_only_legal_client_side_variations_from_known_positions(
     assert "chess.move({ from: orig, to: dest, promotion })" in response.text
     assert "showPosition(currentIndex - 1)" in response.text
     assert "showPosition(currentIndex + 1)" in response.text
-    assert "fetch(" not in response.text
+    explore_move = response.text.split("function exploreMove", 1)[1].split(
+        "function showPosition", 1
+    )[0]
+    assert "fetch(" not in explore_move
 
 
 def test_selecting_a_critical_moment_targets_its_pre_move_position_and_highlights(
