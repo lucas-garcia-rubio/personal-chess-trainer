@@ -69,3 +69,55 @@ class StartDiscussion:
                 moves=moves,
             ),
         )
+
+
+class ContinueDiscussion:
+    def __init__(self, storage: LocalStorage) -> None:
+        self._storage = storage
+
+    def __call__(
+        self, *, origin: str, origin_id: str, base_ply: int, uci: str
+    ) -> Discussion:
+        discussion = next(
+            (
+                item
+                for item in self._storage.list_discussions(origin, origin_id)
+                if item.base_ply == base_ply
+            ),
+            None,
+        )
+        if discussion is None:
+            raise DiscussionValidationError("Discussion not found")
+
+        active_fen = (
+            discussion.moves[-1].resulting_fen
+            if discussion.moves
+            else discussion.base_fen
+        )
+        board = chess.Board(active_fen)
+        try:
+            move = chess.Move.from_uci(uci)
+        except ValueError as error:
+            raise DiscussionValidationError(
+                "Move is invalid at the active Position"
+            ) from error
+        if move not in board.legal_moves:
+            raise DiscussionValidationError("Move is illegal at the active Position")
+
+        san = board.san(move)
+        board.push(move)
+        persisted_move = VariationMove(
+            author="player",
+            uci=uci,
+            san=san,
+            resulting_fen=board.fen(),
+        )
+        self._storage.append_discussion_move(
+            origin, origin_id, base_ply, persisted_move
+        )
+        return Discussion(
+            base_ply=discussion.base_ply,
+            base_fen=discussion.base_fen,
+            messages=discussion.messages,
+            moves=[*discussion.moves, persisted_move],
+        )

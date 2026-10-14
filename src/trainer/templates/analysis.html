@@ -43,6 +43,12 @@
         margin-top: 0.75rem;
       }
       .board-controls output { text-align: center; }
+      .navigation-modes {
+        display: flex;
+        gap: 0.5rem;
+        max-width: 32rem;
+        margin-top: 0.75rem;
+      }
       .best-line-actions {
         display: flex;
         gap: 0.75rem;
@@ -154,6 +160,10 @@
             <output aria-live="polite">Start</output>
             <button type="button" data-direction="next">Next →</button>
           </div>
+          <div class="navigation-modes" aria-label="Board navigation mode">
+            <button type="button" data-navigation-mode="game" aria-pressed="true">Game</button>
+            <button type="button" data-navigation-mode="discussion" aria-pressed="false" disabled>Discussion</button>
+          </div>
           <div class="best-line-actions">
             <button type="button" data-action="best-line"{% if best_line_unavailable_reason %} disabled{% endif %} data-url="{{ best_line_url }}">Show Best Line</button>
             <button type="button" data-action="return-to-game" hidden>Return to Game</button>
@@ -240,10 +250,13 @@
       const initialMovesInput = document.querySelector('[name="initial_moves"]');
       const bestLineButton = document.querySelector('[data-action="best-line"]');
       const returnToGameButton = document.querySelector('[data-action="return-to-game"]');
+      const gameModeButton = document.querySelector('[data-navigation-mode="game"]');
+      const discussionModeButton = document.querySelector('[data-navigation-mode="discussion"]');
       const previewPanel = document.querySelector(".best-line-preview");
       const previewError = document.querySelector("[data-best-line-error]");
       let currentIndex = 0;
       let gameIndex = 0;
+      let navigationMode = "game";
       let bestLinePreview = null;
       let chess = new Chess(navigation.positions[0].fen);
       let exploredMoves = [];
@@ -259,6 +272,12 @@
       }
 
       function movableConfig() {
+        const discussion = trainerData.discussions[String(gameIndex)];
+        const atDiscussionEnd = discussion && currentIndex === discussion.moves.length;
+        const canMove = navigationMode !== "discussion" || atDiscussionEnd;
+        if (!canMove) {
+          return { color: undefined, free: false, dests: new Map() };
+        }
         return {
           color: chess.turn() === "w" ? "white" : "black",
           free: false,
@@ -278,7 +297,33 @@
         return [uci.slice(0, 2), uci.slice(2, 4)];
       }
 
+      async function continueDiscussionMove(orig, dest) {
+        const legalMove = chess
+          .moves({ square: orig, verbose: true })
+          .find((move) => move.to === dest);
+        if (!legalMove) return;
+        chess.move({ from: orig, to: dest, promotion: legalMove.promotion });
+        const uci = chess.history({ verbose: true }).at(-1).lan;
+        const response = await fetch(`${trainerForm.action}/${gameIndex}/moves`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uci }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          showPosition(currentIndex);
+          return;
+        }
+        trainerData.discussions[String(gameIndex)] = result;
+        renderDiscussion();
+        showPosition(result.moves.length);
+      }
+
       function exploreMove(orig, dest) {
+        if (navigationMode === "discussion") {
+          continueDiscussionMove(orig, dest);
+          return;
+        }
         const legalMove = chess
           .moves({ square: orig, verbose: true })
           .find((move) => move.to === dest);
@@ -298,11 +343,14 @@
       }
 
       function showPosition(index) {
+        const discussion = trainerData.discussions[String(gameIndex)];
         const positions = bestLinePreview
           ? [navigation.positions[bestLinePreview.basePly], ...bestLinePreview.moves.map((move) => ({ fen: move.fen, lastMove: move.uci }))]
-          : navigation.positions;
+          : navigationMode === "discussion" && discussion
+            ? [{ fen: discussion.baseFen, lastMove: null }, ...discussion.moves.map((move) => ({ fen: move.fen, lastMove: move.uci }))]
+            : navigation.positions;
         currentIndex = Math.max(0, Math.min(index, positions.length - 1));
-        if (!bestLinePreview) gameIndex = currentIndex;
+        if (!bestLinePreview && navigationMode === "game") gameIndex = currentIndex;
         const position = positions[currentIndex];
         const highlights = bestLinePreview ? undefined : navigation.moments[String(currentIndex)];
         chess = new Chess(position.fen);
@@ -326,18 +374,20 @@
         next.disabled = currentIndex === positions.length - 1;
         status.value = bestLinePreview
           ? `Best Line preview · ${currentIndex} of ${positions.length - 1}`
+          : navigationMode === "discussion"
+            ? `Discussion · ${currentIndex} of ${positions.length - 1}`
           : currentIndex === 0
             ? "Start"
             : `Ply ${currentIndex} of ${positions.length - 1}`;
         for (const moment of moments) {
-          const selected = !bestLinePreview && Number(moment.dataset.positionIndex) === currentIndex;
+          const selected = !bestLinePreview && navigationMode === "game" && Number(moment.dataset.positionIndex) === currentIndex;
           moment.classList.toggle("is-selected", selected);
           moment.querySelector("button").setAttribute("aria-pressed", String(selected));
         }
         for (const point of document.querySelectorAll(".evaluation-point")) {
           point.classList.toggle(
             "is-selected",
-            !bestLinePreview && Number(point.dataset.positionIndex) === currentIndex,
+            !bestLinePreview && navigationMode === "game" && Number(point.dataset.positionIndex) === currentIndex,
           );
         }
         renderDiscussion();
@@ -346,6 +396,7 @@
       function renderDiscussion() {
         discussionContent.replaceChildren();
         const discussion = trainerData.discussions[String(gameIndex)];
+        discussionModeButton.disabled = !discussion;
         trainerForm.hidden = Boolean(discussion);
         if (!discussion) {
           const empty = document.createElement("p");
@@ -377,9 +428,24 @@
 
       function showGamePosition(index) {
         bestLinePreview = null;
+        navigationMode = "game";
+        gameModeButton.setAttribute("aria-pressed", "true");
+        discussionModeButton.setAttribute("aria-pressed", "false");
         previewPanel.hidden = true;
         returnToGameButton.hidden = true;
         showPosition(index);
+      }
+
+      function showDiscussion() {
+        const discussion = trainerData.discussions[String(gameIndex)];
+        if (!discussion) return;
+        bestLinePreview = null;
+        navigationMode = "discussion";
+        gameModeButton.setAttribute("aria-pressed", "false");
+        discussionModeButton.setAttribute("aria-pressed", "true");
+        previewPanel.hidden = true;
+        returnToGameButton.hidden = true;
+        showPosition(discussion.moves.length);
       }
 
       function renderEvaluationCurve() {
@@ -453,6 +519,8 @@
         bestLineButton.disabled = false;
       });
       returnToGameButton.addEventListener("click", () => showGamePosition(gameIndex));
+      gameModeButton.addEventListener("click", () => showGamePosition(gameIndex));
+      discussionModeButton.addEventListener("click", showDiscussion);
       for (const moment of moments) {
         moment.querySelector("button").addEventListener(
           "click",
@@ -460,11 +528,15 @@
         );
       }
       tabs[0].addEventListener("click", () => selectTab("analysis"));
-      tabs[1].addEventListener("click", () => selectTab("trainer"));
+      tabs[1].addEventListener("click", () => {
+        selectTab("trainer");
+        if (trainerData.discussions[String(gameIndex)]) showDiscussion();
+      });
       renderEvaluationCurve();
       const query = new URLSearchParams(window.location.search);
-      showPosition(Number(query.get("ply") || 0));
+      showGamePosition(Number(query.get("ply") || 0));
       selectTab(query.has("trainer") ? "trainer" : "analysis");
+      if (query.has("trainer") && trainerData.discussions[String(gameIndex)]) showDiscussion();
     </script>
   </body>
 </html>

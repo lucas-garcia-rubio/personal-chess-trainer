@@ -4,7 +4,7 @@ import httpx
 from trainer.adapters.lichess import LichessGameSource
 from trainer.adapters.sqlite import SQLiteStorage
 from trainer.adapters.stockfish import StockfishEvaluator
-from trainer.application.discussions import StartDiscussion
+from trainer.application.discussions import ContinueDiscussion, StartDiscussion
 from trainer.application.import_game import ImportGame
 from trainer.application.ports import CandidateEvaluator, PositionEvaluator
 from trainer.application.sync import SyncGames
@@ -48,5 +48,6 @@ def create_app(
         sync_games,
         import_game,
         start_discussion=StartDiscussion(storage),
+        continue_discussion=ContinueDiscussion(storage),
         candidate_evaluator=best_line_evaluator,
     )
