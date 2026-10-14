@@ -13,10 +13,12 @@ import pytest
 def _config(tmp_path: Path) -> str:
     flyway = Path(__file__).parent / "flyway_stub.py"
     flyway.chmod(0o755)
+    missing_opencode = tmp_path / "missing-opencode"
     return (
         '[lichess]\nusername = "test-player"\n\n'
         '[database]\npath = "trainer.db"\n\n'
-        f'[migration]\nflyway_path = "{flyway}"\n'
+        f'[migration]\nflyway_path = "{flyway}"\n\n'
+        f'[opencode]\npath = "{missing_opencode}"\n'
     )
 
 

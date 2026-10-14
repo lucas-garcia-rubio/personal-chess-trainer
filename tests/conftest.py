@@ -5,7 +5,28 @@ import sqlite3
 import pytest
 
 from lichess_mock import LichessMock, load_lichess_fixture
+from trainer.application.ports import TrainerRuntimeAvailability
 from trainer.config import Settings
+
+
+class _FakeDefaultTrainerRuntime:
+    def __init__(self, _settings: object) -> None:
+        pass
+
+    def start(self) -> TrainerRuntimeAvailability:
+        return TrainerRuntimeAvailability.unavailable(
+            "OpenCode is disabled by the test runtime."
+        )
+
+    def stop(self) -> None:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def fake_default_trainer_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "trainer.bootstrap.OpenCodeRuntime", _FakeDefaultTrainerRuntime
+    )
 
 
 @pytest.fixture

@@ -2,11 +2,12 @@ from fastapi import FastAPI
 import httpx
 
 from trainer.adapters.lichess import LichessGameSource
+from trainer.adapters.opencode import OpenCodeRuntime
 from trainer.adapters.sqlite import SQLiteStorage
 from trainer.adapters.stockfish import StockfishEvaluator
 from trainer.application.discussions import StartDiscussion
 from trainer.application.import_game import ImportGame
-from trainer.application.ports import CandidateEvaluator, PositionEvaluator
+from trainer.application.ports import CandidateEvaluator, PositionEvaluator, TrainerRuntime
 from trainer.application.sync import SyncGames
 from trainer.config import Settings
 from trainer.web import create_web_app
@@ -18,6 +19,7 @@ def create_app(
     lichess_transport: httpx.BaseTransport | None = None,
     position_evaluator: PositionEvaluator | None = None,
     candidate_evaluator: CandidateEvaluator | None = None,
+    trainer_runtime: TrainerRuntime | None = None,
 ) -> FastAPI:
     storage = SQLiteStorage(settings.database_path)
     game_source = LichessGameSource(
@@ -49,4 +51,5 @@ def create_app(
         import_game,
         start_discussion=StartDiscussion(storage),
         candidate_evaluator=best_line_evaluator,
+        trainer_runtime=trainer_runtime or OpenCodeRuntime(settings.opencode),
     )
