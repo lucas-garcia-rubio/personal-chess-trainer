@@ -273,11 +273,11 @@ def test_supported_flyway_distribution_migrates_empty_and_legacy_databases(
 
     for database_path in (empty_database, legacy_database):
         with sqlite3.connect(database_path) as database:
-            assert database.execute("PRAGMA user_version").fetchone() == (7,)
+            assert database.execute("PRAGMA user_version").fetchone() == (8,)
             assert database.execute(
                 "SELECT version FROM flyway_schema_history "
                 "WHERE success = 1 ORDER BY installed_rank"
-            ).fetchall() == [("1",), ("2",), ("3",), ("4",), ("5",), ("6",)]
+            ).fetchall() == [("1",), ("2",), ("3",), ("4",), ("5",), ("6",), ("7",)]
             primary_key = [
                 row[1] for row in database.execute("PRAGMA table_info(games)") if row[5]
             ]

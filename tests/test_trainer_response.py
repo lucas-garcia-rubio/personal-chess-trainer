@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 import json
 from typing import cast
 
@@ -9,12 +9,20 @@ from fastapi.testclient import TestClient
 from lichess_mock import LichessMock
 from test_discussion import _trainer_data
 from test_trainer_runtime import FakeTrainerRuntime
-from trainer.application.ports import TrainerRuntimeAvailability
+from trainer.application.ports import ResponseControl, TrainerEvent, TrainerRuntimeAvailability
 from trainer.bootstrap import create_app
 from trainer.config import Settings
 
 
 class FakeOpenCode:
+    def stream(self, session_id: str, system: str, context: str,
+               control: ResponseControl | None = None) -> Iterator[TrainerEvent]:
+        yield TrainerEvent("text", self.respond(session_id, system, context))
+        yield TrainerEvent("completed")
+
+    def abort(self, session_id: str) -> None:
+        pass
+
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
         self.sessions_created = 0

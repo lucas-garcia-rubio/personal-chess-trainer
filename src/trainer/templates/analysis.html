@@ -229,6 +229,8 @@
               I consent to sending this data through OpenCode.</label>
             <div data-discussion-branches aria-label="Discussion Variations"></div>
             <button type="button" data-action="delete-discussion" hidden>Delete Discussion</button>
+            <button type="button" data-action="interrupt-response" hidden>Interrupt response</button>
+            <button type="button" data-action="retry-response" hidden>Tentar novamente</button>
             <p data-discussion-error role="status" hidden></p>
             <form id="trainer-message-form" class="trainer-form" method="post" action="/analyses/{{ origin }}/{{ origin_id }}/discussions">
               <input type="hidden" name="base_ply" value="0">
@@ -262,6 +264,83 @@
       const deleteDiscussionButton = document.querySelector('[data-action="delete-discussion"]');
       const discussionError = document.querySelector("[data-discussion-error]");
       const trainerForm = document.querySelector(".trainer-form");
+      const interruptButton = document.querySelector('[data-action="interrupt-response"]');
+      const retryButton = document.querySelector('[data-action="retry-response"]');
+      const responseStreams = new Map();
+
+      function runningAttempt(discussion) {
+        return discussion?.attempts?.find((attempt) => attempt.status === "running");
+      }
+
+      async function refreshDiscussion(basePly) {
+        const response = await fetch(`${trainerForm.action}/${basePly}`);
+        if (!response.ok) throw new Error("Could not reload the Discussion.");
+        trainerData.discussions[String(basePly)] = await response.json();
+        if (gameIndex === basePly) showPosition(currentIndex);
+      }
+
+      function followResponse(basePly, attempt) {
+        if (responseStreams.has(attempt.id)) return;
+        const source = new EventSource(`${trainerForm.action}/${basePly}/attempts/${attempt.id}/events`);
+        responseStreams.set(attempt.id, source);
+        let updates = Promise.resolve();
+        source.onmessage = (event) => {
+          const visible = JSON.parse(event.data);
+          // Serialize refreshes so an older HTTP result cannot overwrite a newer one.
+          updates = updates.then(() => refreshDiscussion(basePly)).catch((error) => {
+            discussionError.textContent = error.message;
+            discussionError.hidden = false;
+          });
+          if (["completed", "interrupted", "failed", "limited"].includes(visible.type)) {
+            source.close();
+            responseStreams.delete(attempt.id);
+          }
+        };
+        source.onerror = () => {
+          discussionError.textContent = "Reconnecting to the saved Trainer response…";
+          discussionError.hidden = false;
+        };
+      }
+
+      trainerForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const basePly = gameIndex;
+        const body = new URLSearchParams(new FormData(trainerForm));
+        body.set("stream", "true");
+        trainerForm.querySelector('[type="submit"]').disabled = true;
+        try {
+          const response = await fetch(trainerForm.action, { method: "POST", body });
+          if (!response.ok) throw new Error((await response.json()).detail || "Trainer request failed.");
+          const attempt = await response.json();
+          trainerForm.querySelector("textarea").value = "";
+          await refreshDiscussion(basePly);
+          followResponse(basePly, attempt);
+        } catch (error) {
+          discussionError.textContent = error.message;
+          discussionError.hidden = false;
+        } finally {
+          renderDiscussion();
+        }
+      });
+
+      async function responseAction(action) {
+        const basePly = gameIndex;
+        const discussion = trainerData.discussions[String(basePly)];
+        const attempt = action === "interrupt" ? runningAttempt(discussion) : discussion?.attempts?.at(-1);
+        if (!attempt) return;
+        try {
+          const response = await fetch(`${trainerForm.action}/${basePly}/attempts/${attempt.id}/${action}`, { method: "POST" });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Trainer request failed.");
+          await refreshDiscussion(basePly);
+          if (action === "retry") followResponse(basePly, result);
+        } catch (error) {
+          discussionError.textContent = error.message;
+          discussionError.hidden = false;
+        }
+      }
+      interruptButton.addEventListener("click", () => responseAction("interrupt"));
+      retryButton.addEventListener("click", () => responseAction("retry"));
       document.querySelector("#trainer-consent").addEventListener("change", async (event) => {
         const checkbox = event.target;
         const submit = trainerForm.querySelector('[type="submit"]');
@@ -323,7 +402,7 @@
       }
 
       function movableConfig() {
-        if (discussionMutationPending) {
+        if (discussionMutationPending || runningAttempt(trainerData.discussions[String(gameIndex)])) {
           return { color: undefined, free: false, dests: new Map() };
         }
         return {
@@ -359,7 +438,7 @@
       }
 
       async function mutateDiscussion(path, method, body) {
-        if (discussionMutationPending) return;
+        if (discussionMutationPending || runningAttempt(trainerData.discussions[String(gameIndex)])) return;
         const basePly = gameIndex;
         discussionMutationPending = true;
         discussionError.hidden = true;
@@ -471,8 +550,13 @@
         discussionContent.replaceChildren();
         discussionBranches.replaceChildren();
         const discussion = trainerData.discussions[String(gameIndex)];
+        const running = runningAttempt(discussion);
+        const lastAttempt = discussion?.attempts?.at(-1);
+        interruptButton.hidden = !running;
+        retryButton.hidden = !lastAttempt || !["failed", "interrupted", "limited"].includes(lastAttempt.status);
+        trainerForm.querySelector('[type="submit"]').disabled = Boolean(running) || {{ (not trainer_availability.is_available) | tojson }};
         deleteDiscussionButton.hidden = !discussion;
-        deleteDiscussionButton.disabled = discussionMutationPending;
+        deleteDiscussionButton.disabled = discussionMutationPending || Boolean(running);
         discussionModeButton.disabled = !discussion;
         trainerForm.hidden = false;
         if (!discussion) {
@@ -485,6 +569,13 @@
           const entry = document.createElement("p");
           entry.className = "discussion-entry";
           entry.textContent = `${message.author === "player" ? "Player" : "Trainer"}: ${message.body}`;
+          discussionContent.append(entry);
+        }
+        for (const attempt of discussion.attempts || []) {
+          const entry = document.createElement("p");
+          entry.className = "discussion-entry";
+          const terminal = attempt.events.at(-1);
+          entry.textContent = `Trainer attempt ${attempt.id}: ${attempt.status}${attempt.retry_of ? ` (retry of ${attempt.retry_of})` : ""}${terminal?.type !== "text" && terminal?.text ? ` — ${terminal.text}` : ""}`;
           discussionContent.append(entry);
         }
         if (discussion.moves.length) {
@@ -502,6 +593,15 @@
           branch.disabled = discussionMutationPending;
           branch.addEventListener("click", async () => {
             showDiscussion();
+            if (running) {
+              // Local selection is read-only: never change the authoritative active node.
+              const path = discussionPath(discussion, nodeId);
+              const selected = node || { fen: discussion.baseFen };
+              chess = new Chess(selected.fen);
+              ground.set({ fen: selected.fen, movable: movableConfig() });
+              status.value = `Discussion · read-only · ${path.map((move) => move.san).join(" ") || "Base Position"}`;
+              return;
+            }
             await mutateDiscussion("/selection", "POST", { revision: discussion.revision, nodeId });
           });
           discussionBranches.append(branch);
@@ -632,6 +732,10 @@
       showGamePosition(Number(query.get("ply") || 0));
       selectTab(query.has("trainer") ? "trainer" : "analysis");
       if (query.has("trainer") && trainerData.discussions[String(gameIndex)]) showDiscussion();
+      for (const [basePly, discussion] of Object.entries(trainerData.discussions)) {
+        const running = runningAttempt(discussion);
+        if (running) followResponse(Number(basePly), running);
+      }
     </script>
   </body>
 </html>

@@ -1,4 +1,5 @@
 import json
+from collections.abc import Iterator
 import os
 from pathlib import Path
 import re
@@ -12,7 +13,7 @@ from urllib.parse import quote
 
 import httpx
 
-from trainer.application.ports import TrainerRuntimeAvailability
+from trainer.application.ports import ResponseControl, TrainerEvent, TrainerRuntimeAvailability
 from trainer.application.trainer_response import TRAINER_INSTRUCTIONS
 from trainer.config import OpenCodeSettings
 
@@ -36,6 +37,104 @@ class OpenCodeSessionClient:
         if not isinstance(session_id, str) or not session_id:
             raise RuntimeError("OpenCode returned no session ID.")
         return session_id
+
+    def abort(self, session_id: str) -> None:
+        response = self._client.post(f"/session/{quote(session_id, safe='')}/abort")
+        response.raise_for_status()
+        if response.json() is not True:
+            raise RuntimeError("OpenCode did not acknowledge interruption.")
+
+    def stream(self, session_id: str, system: str, context: str,
+               control: ResponseControl | None = None) -> Iterator[TrainerEvent]:
+        control = control or ResponseControl()
+        assistant_ids: set[str] = set()
+        text_by_part: dict[str, str] = {}
+        visible_parts: set[str] = set()
+        tool_states: set[tuple[str, str]] = set()
+        finished_steps: set[str] = set()
+        prompted = False
+        with self._client.stream("GET", "/event", timeout=120.0) as response:
+            response.raise_for_status()
+            data: list[str] = []
+            for line in response.iter_lines():
+                if line.startswith("data:"):
+                    data.append(line[5:].lstrip())
+                    continue
+                if line or not data:
+                    continue
+                event = json.loads("\n".join(data))
+                data.clear()
+                kind = event.get("type")
+                properties = event.get("properties", {})
+                if kind == "server.connected" and not prompted:
+                    with control.lock:
+                        if control.cancelled.is_set():
+                            yield TrainerEvent("interrupted")
+                            return
+                        prompt = self._client.post(
+                            f"/session/{quote(session_id, safe='')}/prompt_async",
+                            json={"agent": "trainer", "system": system,
+                                  "parts": [{"type": "text", "text": context}]},
+                        )
+                        prompt.raise_for_status()
+                        prompted = True
+                elif kind == "message.updated":
+                    info = properties.get("info", {})
+                    if info.get("sessionID") != session_id or info.get("role") != "assistant":
+                        continue
+                    assistant_ids.add(info["id"])
+                    if info.get("error"):
+                        error = info["error"]
+                        yield TrainerEvent("interrupted" if error.get("name") == "MessageAbortedError" else "failed")
+                        return
+                elif kind == "message.part.updated":
+                    part = properties.get("part", {})
+                    if part.get("sessionID") != session_id or part.get("messageID") not in assistant_ids:
+                        continue
+                    part_id = part.get("id")
+                    if not isinstance(part_id, str):
+                        continue
+                    if part.get("type") == "step-finish" and part_id not in finished_steps:
+                        finished_steps.add(part_id)
+                        yield TrainerEvent("step")
+                    elif part.get("type") == "text" and not part.get("synthetic") and not part.get("ignored"):
+                        visible_parts.add(part_id)
+                        text = part.get("text")
+                        if not isinstance(text, str):
+                            continue
+                        previous = text_by_part.get(part_id, "")
+                        if not text.startswith(previous):
+                            raise RuntimeError("OpenCode rewrote confirmed text.")
+                        text_by_part[part_id] = text
+                        if text != previous:
+                            yield TrainerEvent("text", text[len(previous):])
+                    elif part.get("type") == "tool":
+                        state = part.get("state", {}).get("status")
+                        if state in {"running", "completed", "error"} and (part_id, state) not in tool_states:
+                            tool_states.add((part_id, state))
+                            labels = {"running": "Trainer is consulting a chess tool.",
+                                      "completed": "Trainer finished consulting a chess tool.",
+                                      "error": "A Trainer chess tool could not complete."}
+                            yield TrainerEvent("activity", labels[state])
+                elif kind == "message.part.delta":
+                    # Newer v1 servers split text deltas from part snapshots.
+                    part_id = properties.get("partID")
+                    delta = properties.get("delta")
+                    if (properties.get("sessionID") == session_id
+                            and properties.get("messageID") in assistant_ids
+                            and part_id in visible_parts and properties.get("field") == "text"
+                            and isinstance(delta, str)):
+                        text_by_part[part_id] = text_by_part.get(part_id, "") + delta
+                        yield TrainerEvent("text", delta)
+                elif kind == "session.error" and properties.get("sessionID") == session_id:
+                    yield TrainerEvent("failed")
+                    return
+                elif kind in {"session.idle", "session.status"} and properties.get("sessionID") == session_id:
+                    idle = kind == "session.idle" or properties.get("status", {}).get("type") == "idle"
+                    if idle and assistant_ids:
+                        yield TrainerEvent("completed")
+                        return
+        raise RuntimeError("OpenCode stream disconnected.")
 
     def respond(self, session_id: str, system: str, context: str) -> str:
         response = self._client.post(
@@ -175,6 +274,13 @@ class OpenCodeRuntime:
 
     def respond(self, session_id: str, system: str, context: str) -> str:
         return self._session_client().respond(session_id, system, context)
+
+    def stream(self, session_id: str, system: str, context: str,
+               control: ResponseControl | None = None) -> Iterator[TrainerEvent]:
+        return self._session_client().stream(session_id, system, context, control)
+
+    def abort(self, session_id: str) -> None:
+        self._session_client().abort(session_id)
 
     def _session_client(self) -> OpenCodeSessionClient:
         if self._client is None:

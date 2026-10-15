@@ -1,5 +1,7 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 import json
 from pathlib import Path
 from typing import TypedDict, cast
@@ -8,7 +10,7 @@ from urllib.parse import parse_qs
 import chess
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
@@ -19,6 +21,7 @@ from trainer.application.ports import (
     LocalStorage,
     TrainerRuntime,
     TrainerRuntimeAvailability,
+    ResponseAttempt,
 )
 from trainer.application.import_game import (
     ImportEvaluationError,
@@ -34,7 +37,7 @@ from trainer.application.discussions import (
     get_discussion,
 )
 from trainer.application.sync import SyncGames
-from trainer.application.trainer_response import RespondToDiscussion
+from trainer.application.responses import DiscussionResponses
 from trainer.domain import Analysis, Discussion, DiscussionMessage, win_percent
 
 _templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
@@ -61,8 +64,9 @@ class _AnalysisNavigation(TypedDict):
     evaluations: list[_EvaluationPoint]
 
 
-def _discussion_document(discussion: Discussion) -> dict[str, object]:
+def _discussion_document(discussion: Discussion, attempts: list[ResponseAttempt] | None = None) -> dict[str, object]:
     return {
+        "attempts": [asdict(attempt) for attempt in attempts or []],
         "baseFen": discussion.base_fen,
         "revision": discussion.revision,
         "activeNodeId": discussion.active_node_id,
@@ -239,6 +243,7 @@ def create_web_app(
     continue_discussion: ContinueDiscussion,
     candidate_evaluator: CandidateEvaluator | None = None,
 ) -> FastAPI:
+    responses = DiscussionResponses(storage, trainer_runtime)
     trainer_availability = TrainerRuntimeAvailability.unavailable(
         "Trainer runtime has not started."
     )
@@ -246,6 +251,7 @@ def create_web_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         nonlocal trainer_availability
+        storage.recover_responses()
         try:
             trainer_availability = trainer_runtime.start()
         except Exception as error:
@@ -255,7 +261,7 @@ def create_web_app(
         try:
             yield
         finally:
-            trainer_runtime.stop()
+            responses.shutdown()
             game_source.close()
             storage.close()
 
@@ -327,7 +333,7 @@ def create_web_app(
                 ),
                 "trainer_data": {
                     "discussions": {
-                        str(discussion.base_ply): _discussion_document(discussion)
+                        str(discussion.base_ply): _discussion_document(discussion, storage.response_attempts(origin, origin_id, discussion.base_ply))
                         for discussion in storage.list_discussions(origin, origin_id)
                     }
                 },
@@ -356,6 +362,7 @@ def create_web_app(
                 detail="Trainer consent is required before sending data to OpenCode.",
             )
         fields = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
+        attempt = None
         try:
             base_ply = int(fields.get("base_ply", [""])[0])
             initial_moves_document = json.loads(
@@ -372,37 +379,108 @@ def create_web_app(
             message = fields.get("message", [""])[0].strip()
             if not message:
                 raise DiscussionValidationError("Message is required")
-            start_discussion(
-                origin=origin,
-                origin_id=origin_id,
-                base_ply=base_ply,
-                message=fields.get("message", [""])[0],
-                initial_moves=initial_moves_document,
-            )
+            with responses.lock:
+                if any(a.status == "running" for a in storage.response_attempts(origin, origin_id, base_ply)):
+                    raise DiscussionConflict
+                start_discussion(
+                    origin=origin, origin_id=origin_id, base_ply=base_ply,
+                    message=message, initial_moves=initial_moves_document,
+                )
+                if trainer_availability.is_available:
+                    if existing:
+                        storage.append_discussion_message(
+                            origin, origin_id, base_ply,
+                            DiscussionMessage(author="player", body=message),
+                        )
+                    attempt = responses.start(origin, origin_id, base_ply)
+        except DiscussionConflict as error:
+            raise HTTPException(status_code=409, detail="Trainer is responding; board changes are locked.") from error
         except (ValueError, json.JSONDecodeError, DiscussionValidationError) as error:
             detail = str(error) or "Invalid Discussion"
             raise HTTPException(status_code=422, detail=detail) from error
-        if trainer_availability.is_available:
-            try:
-                if existing:
-                    storage.append_discussion_message(
-                        origin, origin_id, base_ply,
-                        DiscussionMessage(author="player", body=message),
-                    )
-                await run_in_threadpool(
-                    RespondToDiscussion(storage, trainer_runtime), origin, origin_id, base_ply
-                )
-            except PermissionError as error:
-                raise HTTPException(status_code=403, detail=str(error)) from error
-            except Exception as error:
+        if attempt is not None:
+            if fields.get("stream", [""])[0] == "true":
+                return JSONResponse(attempt_document(origin, origin_id, base_ply, attempt), status_code=202)
+            await run_in_threadpool(responses.wait, attempt.id)
+            if find_attempt(origin, origin_id, base_ply, attempt.id).status == "failed":
                 raise HTTPException(
                     status_code=503,
                     detail="Trainer response failed. Your Discussion is saved; please try again.",
-                ) from error
+                )
         return RedirectResponse(
             f"/analyses/{origin}/{origin_id}?trainer=1&ply={base_ply}",
             status_code=303,
         )
+
+    def attempt_document(origin: str, origin_id: str, base_ply: int, attempt: ResponseAttempt) -> dict[str, object]:
+        return {**asdict(attempt), "eventsUrl": f"/analyses/{origin}/{origin_id}/discussions/{base_ply}/attempts/{attempt.id}/events"}
+
+    def find_attempt(origin: str, origin_id: str, base_ply: int, attempt_id: int) -> ResponseAttempt:
+        attempt = next((a for a in storage.response_attempts(origin, origin_id, base_ply) if a.id == attempt_id), None)
+        if attempt is None:
+            raise HTTPException(status_code=404, detail="Trainer attempt not found")
+        return attempt
+
+    @app.get("/analyses/{origin}/{origin_id}/discussions/{base_ply}")
+    def read_discussion(origin: str, origin_id: str, base_ply: int) -> dict[str, object]:
+        try:
+            discussion = get_discussion(storage, origin, origin_id, base_ply)
+        except DiscussionValidationError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return _discussion_document(discussion, storage.response_attempts(origin, origin_id, base_ply))
+
+    @app.get("/analyses/{origin}/{origin_id}/discussions/{base_ply}/attempts/{attempt_id}/events")
+    def response_events(request: Request, origin: str, origin_id: str, base_ply: int, attempt_id: int, after: int = 0) -> Response:
+        find_attempt(origin, origin_id, base_ply, attempt_id)
+        try:
+            cursor = max(after, int(request.headers.get("last-event-id", "0")))
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="Invalid event cursor") from error
+
+        async def stream() -> AsyncIterator[str]:
+            nonlocal cursor
+            ticks = 0
+            while True:
+                attempt = find_attempt(origin, origin_id, base_ply, attempt_id)
+                for event in attempt.events:
+                    sequence = cast(int, event["sequence"])
+                    if sequence > cursor:
+                        yield f"id: {sequence}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        cursor = sequence
+                if attempt.status != "running":
+                    return
+                ticks += 1
+                if ticks % 300 == 0:
+                    yield ": keepalive\n\n"
+                await asyncio.sleep(0.05)
+        return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.post("/analyses/{origin}/{origin_id}/discussions/{base_ply}/attempts/{attempt_id}/interrupt")
+    def interrupt_response(origin: str, origin_id: str, base_ply: int, attempt_id: int) -> dict[str, object]:
+        attempt = find_attempt(origin, origin_id, base_ply, attempt_id)
+        try:
+            responses.interrupt(attempt, (origin, origin_id, base_ply))
+        except Exception as error:
+            raise HTTPException(
+                status_code=503,
+                detail="OpenCode could not confirm interruption. Your partial response is saved as interrupted.",
+            ) from error
+        return read_discussion(origin, origin_id, base_ply)
+
+    @app.post("/analyses/{origin}/{origin_id}/discussions/{base_ply}/attempts/{attempt_id}/retry")
+    def retry_response(origin: str, origin_id: str, base_ply: int, attempt_id: int) -> Response:
+        find_attempt(origin, origin_id, base_ply, attempt_id)
+        if not storage.trainer_consent():
+            raise HTTPException(status_code=403, detail="Trainer consent is required.")
+        if not trainer_availability.is_available:
+            raise HTTPException(status_code=503, detail="Trainer unavailable.")
+        try:
+            attempt = responses.start(origin, origin_id, base_ply, attempt_id)
+        except DiscussionConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return JSONResponse(attempt_document(origin, origin_id, base_ply, attempt), status_code=202)
 
     @app.post("/analyses/{origin}/{origin_id}/best-line")
     def best_line(
@@ -450,7 +528,7 @@ def create_web_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
         except DiscussionValidationError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        return _discussion_document(discussion)
+        return _discussion_document(discussion, storage.response_attempts(origin, origin_id, base_ply))
 
     @app.post("/analyses/{origin}/{origin_id}/discussions/{base_ply}/selection")
     def select_existing_discussion_node(
@@ -465,7 +543,7 @@ def create_web_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
         except DiscussionValidationError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        return _discussion_document(discussion)
+        return _discussion_document(discussion, storage.response_attempts(origin, origin_id, base_ply))
 
     @app.delete("/analyses/{origin}/{origin_id}/discussions/{base_ply}")
     def delete_existing_discussion(

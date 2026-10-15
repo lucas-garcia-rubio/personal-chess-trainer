@@ -1,5 +1,6 @@
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from threading import Event, RLock
 from typing import Protocol, runtime_checkable
 
 from trainer.domain import (
@@ -63,8 +64,54 @@ class TrainerRuntime(Protocol):
 
     def respond(self, session_id: str, system: str, context: str) -> str: ...
 
+    def stream(
+        self, session_id: str, system: str, context: str,
+        control: "ResponseControl | None" = None,
+    ) -> Iterator["TrainerEvent"]: ...
+
+    def abort(self, session_id: str) -> None: ...
+
+
+@dataclass(frozen=True)
+class TrainerEvent:
+    type: str
+    text: str = ""
+
+
+class ResponseControl:
+    """Serialize provider dispatch with cancellation, including pre-session stops."""
+
+    def __init__(self) -> None:
+        self.lock = RLock()
+        self.cancelled = Event()
+
+
+@dataclass(frozen=True)
+class ResponseAttempt:
+    id: int
+    request_id: int
+    retry_of: int | None
+    revision: int
+    status: str
+    events: list[dict[str, object]]
+
 
 class LocalStorage(Protocol):
+    def response_request(self, request_id: int) -> str: ...
+
+    def begin_response(
+        self, origin: str, origin_id: str, base_ply: int,
+        retry_of: int | None = None,
+    ) -> ResponseAttempt: ...
+
+    def response_attempts(
+        self, origin: str, origin_id: str, base_ply: int,
+    ) -> list[ResponseAttempt]: ...
+
+    def record_response_event(self, attempt_id: int, event: TrainerEvent) -> None: ...
+
+    def recover_responses(self) -> None: ...
+
     def get_game_headers(self, origin: str, origin_id: str) -> dict[str, str]: ...
 
     def get_discussion_session(
