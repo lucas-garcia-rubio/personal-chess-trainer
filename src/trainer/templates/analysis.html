@@ -216,6 +216,11 @@
           </div>
           <div role="tabpanel" data-panel="trainer" hidden>
             <h2>Trainer</h2>
+            {% if trainer_availability.is_available %}
+              <p role="status">Trainer available</p>
+            {% else %}
+              <p role="alert"><strong>Trainer unavailable.</strong> {{ trainer_availability.reason }}</p>
+            {% endif %}
             <div data-discussion-content></div>
             <div data-discussion-branches aria-label="Discussion Variations"></div>
             <button type="button" data-action="delete-discussion" hidden>Delete Discussion</button>
@@ -224,8 +229,8 @@
               <input type="hidden" name="base_ply" value="0">
               <input type="hidden" name="initial_moves" value="[]">
               <label for="trainer-message">Discuss this Position</label>
-              <textarea id="trainer-message" name="message" required></textarea>
-              <button type="submit">Send to Trainer</button>
+              <textarea id="trainer-message" name="message" required{% if not trainer_availability.is_available %} disabled{% endif %}></textarea>
+              <button type="submit"{% if not trainer_availability.is_available %} disabled{% endif %}>Send to Trainer</button>
             </form>
           </div>
         </section>

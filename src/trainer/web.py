@@ -11,7 +11,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from trainer.application.ports import CandidateEvaluator, DiscussionConflict, GameSource, LocalStorage
+from trainer.application.ports import (
+    CandidateEvaluator,
+    DiscussionConflict,
+    GameSource,
+    LocalStorage,
+    TrainerRuntime,
+    TrainerRuntimeAvailability,
+)
 from trainer.application.import_game import (
     ImportEvaluationError,
     ImportGame,
@@ -222,14 +229,29 @@ def create_web_app(
     sync_games: SyncGames,
     import_game: ImportGame,
     start_discussion: StartDiscussion,
+    trainer_runtime: TrainerRuntime,
     continue_discussion: ContinueDiscussion,
     candidate_evaluator: CandidateEvaluator | None = None,
 ) -> FastAPI:
+    trainer_availability = TrainerRuntimeAvailability.unavailable(
+        "Trainer runtime has not started."
+    )
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        yield
-        game_source.close()
-        storage.close()
+        nonlocal trainer_availability
+        try:
+            trainer_availability = trainer_runtime.start()
+        except Exception as error:
+            trainer_availability = TrainerRuntimeAvailability.unavailable(
+                f"OpenCode failed to start: {error}"
+            )
+        try:
+            yield
+        finally:
+            trainer_runtime.stop()
+            game_source.close()
+            storage.close()
 
     app = FastAPI(lifespan=lifespan)
 
@@ -300,6 +322,7 @@ def create_web_app(
                     else None
                 ),
                 "best_line_url": f"/analyses/{origin}/{origin_id}/best-line",
+                "trainer_availability": trainer_availability,
             },
         )
 

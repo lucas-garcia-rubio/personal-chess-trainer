@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from trainer.domain import (
@@ -36,6 +37,26 @@ class CandidateEvaluator(Protocol):
     def evaluate_candidates(
         self, position: str, max_candidates: int
     ) -> EvaluationRun: ...
+
+
+@dataclass(frozen=True)
+class TrainerRuntimeAvailability:
+    is_available: bool
+    reason: str | None = None
+
+    @classmethod
+    def available(cls) -> "TrainerRuntimeAvailability":
+        return cls(is_available=True)
+
+    @classmethod
+    def unavailable(cls, reason: str) -> "TrainerRuntimeAvailability":
+        return cls(is_available=False, reason=reason)
+
+
+class TrainerRuntime(Protocol):
+    def start(self) -> TrainerRuntimeAvailability: ...
+
+    def stop(self) -> None: ...
 
 
 class LocalStorage(Protocol):
