@@ -26,8 +26,9 @@ _LISTENING_PATTERN = re.compile(
 class OpenCodeSessionClient:
     """The OpenCode v1 HTTP boundary; only visible assistant text leaves it."""
 
-    def __init__(self, client: httpx.Client) -> None:
+    def __init__(self, client: httpx.Client, directory: str | None = None) -> None:
         self._client = client
+        self._directory = directory
 
     def create_session(self) -> str:
         response = self._client.post("/session", json={"title": "Chess Discussion"})
@@ -37,6 +38,20 @@ class OpenCodeSessionClient:
         if not isinstance(session_id, str) or not session_id:
             raise RuntimeError("OpenCode returned no session ID.")
         return session_id
+
+    def session_compatible(self, session_id: str) -> bool:
+        response = self._client.get(f"/session/{quote(session_id, safe='')}")
+        if response.status_code == 404:
+            return False
+        response.raise_for_status()
+        document = response.json()
+        return (isinstance(document, dict) and document.get("id") == session_id
+                and (self._directory is None or document.get("directory") == self._directory))
+
+    def delete_session(self, session_id: str) -> None:
+        response = self._client.delete(f"/session/{quote(session_id, safe='')}")
+        if response.status_code != 404:
+            response.raise_for_status()
 
     def abort(self, session_id: str) -> None:
         response = self._client.post(f"/session/{quote(session_id, safe='')}/abort")
@@ -280,6 +295,12 @@ class OpenCodeRuntime:
     def create_session(self) -> str:
         return self._session_client().create_session()
 
+    def session_compatible(self, session_id: str) -> bool:
+        return self._session_client().session_compatible(session_id)
+
+    def delete_session(self, session_id: str) -> None:
+        self._session_client().delete_session(session_id)
+
     def respond(self, session_id: str, system: str, context: str) -> str:
         return self._session_client().respond(session_id, system, context)
 
@@ -293,7 +314,9 @@ class OpenCodeRuntime:
     def _session_client(self) -> OpenCodeSessionClient:
         if self._client is None:
             raise RuntimeError("OpenCode is unavailable.")
-        return OpenCodeSessionClient(self._client)
+        return OpenCodeSessionClient(
+            self._client, self._workspace.name if self._workspace is not None else None,
+        )
 
     def stop(self) -> None:
         if self._client is not None:

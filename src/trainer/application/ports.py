@@ -62,6 +62,10 @@ class TrainerRuntime(Protocol):
 
     def create_session(self) -> str: ...
 
+    def session_compatible(self, session_id: str) -> bool: ...
+
+    def delete_session(self, session_id: str) -> None: ...
+
     def respond(self, session_id: str, system: str, context: str) -> str: ...
 
     def stream(
@@ -84,6 +88,7 @@ class ResponseControl:
     def __init__(self) -> None:
         self.lock = RLock()
         self.cancelled = Event()
+        self.context_chars = 0
 
 
 @dataclass(frozen=True)
@@ -96,7 +101,25 @@ class ResponseAttempt:
     events: list[dict[str, object]]
 
 
+@dataclass(frozen=True)
+class SessionCheckpoint:
+    history: int
+    nodes: int
+    events: dict[str, int]
+    context_chars: int
+    version: int = 1
+
+
 class LocalStorage(Protocol):
+    def session_checkpoint(
+        self, origin: str, origin_id: str, base_ply: int,
+    ) -> SessionCheckpoint | None: ...
+
+    def save_session_checkpoint(
+        self, origin: str, origin_id: str, base_ply: int,
+        session_id: str, checkpoint: SessionCheckpoint,
+    ) -> None: ...
+
     def adopt_evaluator_line(
         self, origin: str, origin_id: str, base_ply: int, revision: int | None,
         parent_id: int | None, base_fen: str, moves: list[VariationMove],

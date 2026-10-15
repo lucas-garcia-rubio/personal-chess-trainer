@@ -3,7 +3,7 @@ from typing import cast
 
 import chess
 
-from trainer.application.ports import DiscussionConflict, LocalStorage
+from trainer.application.ports import DiscussionConflict, LocalStorage, TrainerRuntime
 from trainer.domain import Discussion, DiscussionMessage, VariationMove
 
 
@@ -177,8 +177,9 @@ class PlayTrainerLine:
 
 
 class DeleteDiscussion:
-    def __init__(self, storage: LocalStorage) -> None:
+    def __init__(self, storage: LocalStorage, runtime: TrainerRuntime) -> None:
         self._storage = storage
+        self._runtime = runtime
 
     def __call__(
         self, *, origin: str, origin_id: str, base_ply: int,
@@ -186,4 +187,12 @@ class DeleteDiscussion:
     ) -> None:
         if not confirmed:
             raise DiscussionValidationError("Confirm deletion of the Discussion")
+        session = self._storage.get_discussion_session(origin, origin_id, base_ply)
         self._storage.delete_discussion(origin, origin_id, base_ply, revision)
+        if session is not None:
+            try:
+                self._runtime.delete_session(session)
+            except Exception:
+                # The local aggregate is already removed. Runtime cleanup may
+                # fail while OpenCode is offline without undoing that deletion.
+                pass

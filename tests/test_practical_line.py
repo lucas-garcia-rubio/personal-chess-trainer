@@ -146,7 +146,11 @@ def test_practical_line_targets_active_position_and_resumes_one_discussion(
             context = runtime.context
             assert context["active_node_id"] is None
             assert context["active_position"] == before["baseFen"]
-            assert len(context["variations"]) == len(before["nodes"])
+            assert context["context_delivery"] == "delta"
+            assert context["variations"] == []
+            assert context["practical_line"]["evidence"]["status"] == "verified"
+            refreshed = call(client, runtime.token, "read_context", {"attempt_id": resumed["id"]})["structuredContent"]
+            assert [n["san"] for n in refreshed["variations"]] == [n["san"] for n in before["nodes"]]
             assert client.get(URL + "/0").json()["revision"] > before["revision"]
         finally:
             runtime.release.set()

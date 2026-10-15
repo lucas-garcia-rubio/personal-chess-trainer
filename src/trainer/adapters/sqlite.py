@@ -1,4 +1,5 @@
 import sqlite3
+from dataclasses import asdict
 from pathlib import Path
 import json
 from threading import RLock
@@ -8,6 +9,7 @@ from trainer.application.ports import (
     DiscussionConflict,
     GameIdentityConflict,
     ResponseAttempt,
+    SessionCheckpoint,
     TrainerEvent,
 )
 from trainer.domain import (
@@ -608,9 +610,37 @@ class SQLiteStorage:
     ) -> None:
         with self._discussion_lock, self._connection:
             self._connection.execute(
-                """UPDATE discussions SET opencode_session_id = ?
+                """UPDATE discussions SET opencode_session_id = ?, session_checkpoint = NULL
                 WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?""",
                 (session_id, origin, origin_id, base_ply),
+            )
+
+    def session_checkpoint(
+        self, origin: str, origin_id: str, base_ply: int,
+    ) -> SessionCheckpoint | None:
+        with self._discussion_lock:
+            row = self._connection.execute(
+                """SELECT session_checkpoint FROM discussions
+                WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?""",
+                (origin, origin_id, base_ply),
+            ).fetchone()
+            if row is None or row[0] is None:
+                return None
+            try:
+                return SessionCheckpoint(**json.loads(row[0]))
+            except (TypeError, ValueError):
+                return None
+
+    def save_session_checkpoint(
+        self, origin: str, origin_id: str, base_ply: int,
+        session_id: str, checkpoint: SessionCheckpoint,
+    ) -> None:
+        with self._discussion_lock, self._connection:
+            self._connection.execute(
+                """UPDATE discussions SET session_checkpoint = ?
+                WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?
+                AND opencode_session_id = ?""",
+                (json.dumps(asdict(checkpoint)), origin, origin_id, base_ply, session_id),
             )
 
     def append_discussion_message(

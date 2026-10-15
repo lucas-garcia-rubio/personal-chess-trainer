@@ -32,6 +32,12 @@ class FakeTrainerRuntime:
     def create_session(self) -> str:
         raise AssertionError("Availability checks must not create a model session")
 
+    def session_compatible(self, session_id: str) -> bool:
+        raise AssertionError("Availability checks must not inspect model sessions")
+
+    def delete_session(self, session_id: str) -> None:
+        raise AssertionError("Availability checks must not delete model sessions")
+
     def respond(self, session_id: str, system: str, context: str) -> str:
         raise AssertionError("Availability checks must not contact a model")
 

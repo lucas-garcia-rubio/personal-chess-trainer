@@ -8,6 +8,7 @@ from trainer.application.ports import (
     TrainerRuntime,
 )
 from trainer.application.trainer_response import RespondToDiscussion
+from trainer.application.session_context import checkpoint
 from trainer.application.evaluation import EvaluatePosition
 
 
@@ -52,6 +53,12 @@ class DiscussionResponses:
                     if attempt.status != "running":
                         return
                     self.storage.record_response_event(attempt_id, event)
+                    if event.type == "completed":
+                        session = self.storage.get_discussion_session(*key)
+                        if session is not None:
+                            self.storage.save_session_checkpoint(
+                                *key, session, checkpoint(self.storage, key, self._controls[attempt_id].context_chars),
+                            )
         except Exception:
             with self.lock:
                 current = next(
