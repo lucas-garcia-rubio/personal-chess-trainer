@@ -14,7 +14,7 @@ def context_size(context: dict[str, object]) -> int:
     # Game, Analysis and the Variation tree must always remain available in full;
     # the budget applies to the disposable dialogue, not immutable chess records.
     return len(json.dumps({key: context[key] for key in (
-        "history", "response_attempts", "derived_summary",
+        "history", "response_attempts", "derived_summary", "practical_line",
     ) if key in context}, ensure_ascii=False))
 
 
@@ -64,7 +64,7 @@ def delta_context(context: dict[str, object], previous: SessionCheckpoint) -> di
         {**a, "events": cast(list[object], a["events"])[previous.events.get(str(a["id"]), 0):]}
         for a in attempts if len(cast(list[object], a["events"])) > previous.events.get(str(a["id"]), 0)
     ]
-    for key in ("attempt_id", "response_request"):
+    for key in ("attempt_id", "response_request", "practical_line"):
         if key in context:
             result[key] = context[key]
     return result

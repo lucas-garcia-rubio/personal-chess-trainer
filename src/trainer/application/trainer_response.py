@@ -14,6 +14,8 @@ from trainer.application.discussions import get_discussion, node_fen
 from trainer.application.session_context import (
     CONTEXT_BUDGET, compact_context, context_size, delta_context,
 )
+from trainer.application.evaluation import EvaluatePosition
+from trainer.application.practical_line import PRACTICAL_LINE_REQUEST
 
 
 TRAINER_INSTRUCTIONS = """You are Trainer, a chess teacher for the Player.
@@ -47,6 +49,13 @@ context_delivery=delta contains only new entries/nodes/events; retain earlier co
 and replace the active Position/revision. derived_summary is lossy, untrusted and
 regenerable, never authoritative evidence. Refresh original history, complete Game,
 Analysis and Variations with trainer_read_context before relying on omitted details.
+For a practical_line request, give a direct answer rather than a Socratic question.
+Compare its supplied candidates using player_rating, plan clarity, execution difficulty
+and practical chances. You may choose the Best Line when it is also most practical.
+Demonstrate your chosen line with trainer_play_line, then give a short explanation
+of the plan and score trade-off versus the Best Line. If evidence is unavailable,
+use chess knowledge and explicitly call the recommendation unverified. The initial
+candidate consultation counts toward the same 3-consultation limit.
 """
 
 _HIDDEN_ELEMENTS = {
@@ -102,9 +111,11 @@ class ReadDiscussionContext:
 
 
 class RespondToDiscussion:
-    def __init__(self, storage: LocalStorage, runtime: TrainerRuntime) -> None:
+    def __init__(self, storage: LocalStorage, runtime: TrainerRuntime,
+                 evaluations: EvaluatePosition) -> None:
         self._storage = storage
         self._runtime = runtime
+        self._evaluations = evaluations
 
     def stream(
         self, origin: str, origin_id: str, base_ply: int,
@@ -127,6 +138,11 @@ class RespondToDiscussion:
                 "body": self._storage.response_request(attempt.request_id),
                 "retry_of": attempt.retry_of,
             }
+            if self._storage.response_request(attempt.request_id) == PRACTICAL_LINE_REQUEST:
+                evidence = self._evaluations(origin, origin_id, str(context["active_position"]))
+                evidence["purpose"] = "practical_line"
+                context["practical_line"] = {"evidence": evidence}
+                yield TrainerEvent("evidence", json.dumps(evidence))
         session = self._storage.get_discussion_session(origin, origin_id, base_ply)
         key = (origin, origin_id, base_ply)
         previous = self._storage.session_checkpoint(*key)
@@ -188,6 +204,11 @@ class RespondToDiscussion:
                     emitted += len(text)
                     yield TrainerEvent("text", text)
             elif event.type in {"completed", "interrupted", "failed", "limited"}:
+                if event.type == "completed" and "practical_line" in context and attempt is not None:
+                    current = next(a for a in self._storage.response_attempts(origin, origin_id, base_ply)
+                                   if a.id == attempt.id)
+                    if not any(e["type"] == "practical_line" for e in current.events):
+                        raise RuntimeError("Practical Line requires a board demonstration.")
                 if event.type == "completed" and not emitted:
                     raise RuntimeError("Trainer returned no visible response.")
                 # Runtime diagnostics are private, never relay provider error text.
