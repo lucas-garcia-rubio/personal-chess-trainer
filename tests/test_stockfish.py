@@ -121,6 +121,56 @@ def test_evaluates_positions_through_a_single_process_per_operation(
     ]
 
 
+def test_returns_up_to_three_ordered_candidates_with_effective_provenance(
+    stub_engine: StubEngine,
+) -> None:
+    stub_engine.script(
+        {
+            "name": "StubEngine 2.3",
+            "positions": {
+                START_FEN: [
+                    "info depth 15 multipv 1 score cp 35 pv e2e4 e7e5 g1f3",
+                    "info depth 15 multipv 2 score cp 20 pv d2d4 d7d5",
+                    "info depth 15 multipv 3 score cp 10 pv g1f3 d7d5",
+                    "bestmove e2e4",
+                ]
+            },
+        }
+    )
+
+    run = StockfishEvaluator(
+        EngineSettings(executable=stub_engine.executable)
+    ).evaluate_candidates(START_FEN, 3)
+
+    assert run.evaluations == [
+        PositionEvaluation(
+            fen=START_FEN,
+            score=EvaluationScore(kind="cp", value=35),
+            best_move="e2e4",
+            principal_variation=["e2e4", "e7e5", "g1f3"],
+        ),
+        PositionEvaluation(
+            fen=START_FEN,
+            score=EvaluationScore(kind="cp", value=20),
+            best_move="d2d4",
+            principal_variation=["d2d4", "d7d5"],
+        ),
+        PositionEvaluation(
+            fen=START_FEN,
+            score=EvaluationScore(kind="cp", value=10),
+            best_move="g1f3",
+            principal_variation=["g1f3", "d7d5"],
+        ),
+    ]
+    assert run.provenance.parameters == {
+        "depth": 15,
+        "threads": 1,
+        "hash_mb": 128,
+        "multi_pv": 3,
+    }
+    assert "setoption name MultiPV value 3" in stub_engine.commands()
+
+
 def test_applies_configured_depth_threads_and_hash(
     scripted_engine: StubEngine,
 ) -> None:

@@ -6,6 +6,7 @@ from trainer.config import (
     ConfigError,
     EngineSettings,
     MigrationSettings,
+    OpenCodeSettings,
     Settings,
     load_settings,
 )
@@ -27,6 +28,7 @@ def test_load_settings_reads_toml_and_resolves_database_path(
         database_path=tmp_path / "data" / "trainer.db",
         engine=EngineSettings(),
         migration=MigrationSettings(),
+        opencode=OpenCodeSettings(),
     )
 
 
@@ -91,6 +93,25 @@ def test_load_settings_reads_and_resolves_the_flyway_path(tmp_path: Path) -> Non
     )
 
 
+def test_load_settings_reads_and_resolves_the_opencode_path(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[lichess]\nusername = "test-player"\n\n'
+        '[database]\npath = "data/trainer.db"\n\n'
+        '[opencode]\npath = "tools/opencode"\nstartup_timeout_seconds = 12\n'
+        'http_timeout_seconds = 3\n',
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.opencode == OpenCodeSettings(
+        executable=tmp_path / "tools" / "opencode",
+        startup_timeout_seconds=12,
+        http_timeout_seconds=3,
+    )
+
+
 @pytest.mark.parametrize(
     ("engine_section", "expected_message"),
     [
@@ -107,6 +128,15 @@ def test_load_settings_reads_and_resolves_the_flyway_path(tmp_path: Path) -> Non
         ("[engine]\ntimeout_seconds = false\n", "Set [engine] timeout_seconds to a positive integer"),
         ("[engine]\ntimeout_seconds = 3601\n", "Set [engine] timeout_seconds between 1 and 3600"),
         ('[migration]\nflyway_path = 42\n', "Set [migration] flyway_path"),
+        ('[opencode]\npath = 42\n', "Set [opencode] path"),
+        (
+            '[opencode]\nstartup_timeout_seconds = 0\n',
+            "Set [opencode] startup_timeout_seconds to a positive integer",
+        ),
+        (
+            '[opencode]\nhttp_timeout_seconds = false\n',
+            "Set [opencode] http_timeout_seconds to a positive integer",
+        ),
     ],
 )
 def test_load_settings_rejects_invalid_engine_configuration(

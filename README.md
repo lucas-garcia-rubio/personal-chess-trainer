@@ -4,8 +4,8 @@ Aplicativo web local para revisar as partidas de xadrez do Player.
 
 ## Desenvolvimento
 
-O projeto requer Python 3.12 ou posterior, Flyway `13.9.0` com suporte a SQLite
-e usa uma virtual environment local:
+O projeto requer Python 3.12 ou posterior, Flyway `13.9.0` com suporte a SQLite,
+OpenCode para o Trainer e usa uma virtual environment local:
 
 ```bash
 python -m venv .venv
@@ -36,12 +36,20 @@ timeout_seconds = 600
 # Opcional quando `flyway` ja esta no PATH.
 [migration]
 flyway_path = "/caminho/para/flyway"
+
+# Opcional quando `opencode` ja esta no PATH.
+[opencode]
+path = "/caminho/para/opencode"
+startup_timeout_seconds = 10
+http_timeout_seconds = 5
 ```
 
-Caminhos relativos do banco e do executável Flyway são resolvidos a partir da
-pasta que contém o arquivo de configuração. Antes de abrir o banco ou iniciar o
+Caminhos relativos do banco e dos executáveis são resolvidos a partir da pasta
+que contém o arquivo de configuração. Antes de abrir o banco ou iniciar o
 servidor, `trainer serve` exige exatamente Flyway `13.9.0`, valida os checksums e
-aplica as migrations em `src/trainer/migrations`. Inicie a aplicação com:
+aplica as migrations em `src/trainer/migrations`. O OpenCode roda em um diretório
+privado ligado somente a `127.0.0.1`; sua indisponibilidade desativa apenas o
+Trainer. Inicie a aplicação com:
 
 ```bash
 trainer serve

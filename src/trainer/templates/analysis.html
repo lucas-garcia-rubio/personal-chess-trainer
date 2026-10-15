@@ -43,6 +43,31 @@
         margin-top: 0.75rem;
       }
       .board-controls output { text-align: center; }
+      .navigation-modes {
+        display: flex;
+        gap: 0.5rem;
+        max-width: 32rem;
+        margin-top: 0.75rem;
+      }
+      .best-line-actions {
+        display: flex;
+        gap: 0.75rem;
+        max-width: 32rem;
+        margin-top: 0.75rem;
+      }
+      .best-line-preview {
+        max-width: 32rem;
+        margin-top: 0.75rem;
+        padding: 0.75rem;
+        border: 1px solid #dcb86b;
+        border-radius: 0.25rem;
+        background: #24201b;
+      }
+      .best-line-preview h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+      .best-line-preview p { margin: 0.35rem 0; }
+      .best-line-error { color: #f09a7f; }
+      .evaluator-evidence, .practical-line-evidence { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid #58786b; border-radius: 0.4rem; }
+      .evaluator-evidence p { margin: 0.35rem 0; }
       .evaluation-panel {
         max-width: 32rem;
         margin: 1.5rem 0 0;
@@ -107,6 +132,18 @@
       [data-brush="red"]::before { background: #d85040; }
       [data-brush="green"]::before { background: #629924; }
       .layout > section { min-width: 0; }
+      .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+      [role="tabpanel"][hidden] { display: none; }
+      .discussion-entry { padding: 0.75rem; background: #24201b; }
+      .discussion-entry + .discussion-entry { margin-top: 0.5rem; }
+      .trainer-form { display: grid; gap: 0.75rem; margin-top: 1rem; }
+      .trainer-form textarea {
+        min-height: 7rem;
+        padding: 0.75rem;
+        border: 1px solid #665d50;
+        background: #211e19;
+        color: inherit;
+      }
       @media (max-width: 48rem) {
         .layout { grid-template-columns: 1fr; }
       }
@@ -125,6 +162,23 @@
             <output aria-live="polite">Start</output>
             <button type="button" data-direction="next">Next →</button>
           </div>
+          <div class="navigation-modes" aria-label="Board navigation mode">
+            <button type="button" data-navigation-mode="game" aria-pressed="true">Game</button>
+            <button type="button" data-navigation-mode="discussion" aria-pressed="false" disabled>Discussion</button>
+          </div>
+          <div class="best-line-actions">
+            <button type="button" data-action="best-line"{% if best_line_unavailable_reason %} disabled{% endif %} data-url="{{ best_line_url }}">Show Best Line</button>
+            <button type="button" data-action="practical-line"{% if not trainer_availability.is_available %} disabled{% endif %}>Mostrar linha prática</button>
+            <button type="button" data-action="return-to-game" hidden>Return to Game</button>
+          </div>
+          <aside class="best-line-preview" hidden aria-live="polite">
+            <h2>Best Line preview</h2>
+            <p data-preview-score></p>
+            <p data-preview-moves></p>
+            <p data-preview-provenance></p>
+            <button type="button" data-action="adopt-preview">Continue from this preview</button>
+          </aside>
+          <p class="best-line-error" data-best-line-error{% if not best_line_unavailable_reason %} hidden{% endif %} aria-live="polite">{{ best_line_unavailable_reason or "" }}</p>
           <div class="highlight-key" aria-label="Move highlight legend">
             <span data-brush="red">Played</span>
             <span data-brush="green">Best</span>
@@ -141,7 +195,12 @@
           </figure>
         </section>
         <section>
-          <h2>Critical Moments</h2>
+          <div class="tabs" role="tablist" aria-label="Analysis content">
+            <button type="button" role="tab">Analysis</button>
+            <button type="button" role="tab">Trainer</button>
+          </div>
+          <div role="tabpanel" data-panel="analysis">
+            <h2>Critical Moments</h2>
           {% if analysis.has_evaluations %}
             {% for moment in analysis.critical_moments %}
               <article class="moment" data-position-index="{{ moment.ply - 1 }}">
@@ -157,24 +216,237 @@
             {% endfor %}
           {% else %}
             <p>No server evaluation is available for this Game.</p>
-          {% endif %}
+            {% endif %}
+          </div>
+          <div role="tabpanel" data-panel="trainer" hidden>
+            <h2>Trainer</h2>
+            {% if trainer_availability.is_available %}
+              <p role="status">Trainer available</p>
+            {% else %}
+              <p role="alert"><strong>Trainer unavailable.</strong> {{ trainer_availability.reason }}</p>
+            {% endif %}
+            <div data-discussion-content>
+              {% for base_ply, view in discussion_views %}
+              {% include 'discussion.html' %}
+              {% endfor %}
+            </div>
+            <p>OpenCode may send Game moves, Analysis, Variations and Discussion text,
+              including the Player's rating, to its configured provider. Acceptance is
+              stored locally and can be revoked here to block new sends.</p>
+            <label><input type="checkbox" id="trainer-consent" form="trainer-message-form" required{% if trainer_consent %} checked{% endif %}>
+              I consent to sending this data through OpenCode.</label>
+            <button type="button" data-action="delete-discussion" hidden>Delete Discussion</button>
+            <button type="button" data-action="interrupt-response" hidden>Interrupt response</button>
+            <button type="button" data-action="retry-response" hidden>Tentar novamente</button>
+            <p data-discussion-error role="status" hidden></p>
+            <form id="trainer-message-form" class="trainer-form" method="post" action="/analyses/{{ origin }}/{{ origin_id }}/discussions">
+              <input type="hidden" name="base_ply" value="0">
+              <input type="hidden" name="initial_moves" value="[]">
+              <label for="trainer-message">Discuss this Position</label>
+              <textarea id="trainer-message" name="message" required{% if not trainer_availability.is_available %} disabled{% endif %}></textarea>
+              <button type="submit"{% if not trainer_availability.is_available %} disabled{% endif %}>Send to Trainer</button>
+            </form>
+          </div>
         </section>
       </div>
     </main>
     <script id="analysis-navigation" type="application/json">{{ navigation | tojson }}</script>
+    <script id="trainer-data" type="application/json">{{ trainer_data | tojson }}</script>
+    <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js"></script>
     <script type="module">
       import { Chessground } from "https://cdn.jsdelivr.net/npm/@lichess-org/chessground@10.4.2/+esm";
       import { Chess } from "https://cdn.jsdelivr.net/npm/chess.js@1.4.0/+esm";
 
       const navigation = JSON.parse(document.querySelector("#analysis-navigation").textContent);
+      const trainerData = JSON.parse(document.querySelector("#trainer-data").textContent);
       const board = document.querySelector(".board");
       const curve = document.querySelector(".evaluation-curve");
       const previous = document.querySelector('[data-direction="previous"]');
       const next = document.querySelector('[data-direction="next"]');
       const status = document.querySelector(".board-controls output");
       const moments = [...document.querySelectorAll(".moment")];
+      const tabs = [...document.querySelectorAll('[role="tab"]')];
+      const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+      const discussionContent = document.querySelector("[data-discussion-content]");
+      const deleteDiscussionButton = document.querySelector('[data-action="delete-discussion"]');
+      const discussionError = document.querySelector("[data-discussion-error]");
+      const trainerForm = document.querySelector(".trainer-form");
+      const interruptButton = document.querySelector('[data-action="interrupt-response"]');
+      const retryButton = document.querySelector('[data-action="retry-response"]');
+      const responseStreams = new Map();
+      const responseCursors = new Map();
+      for (const [basePly, discussion] of Object.entries(trainerData.discussions)) {
+        const attempt = runningAttempt(discussion);
+        if (attempt) responseCursors.set(Number(basePly), { attemptId: attempt.id, cursor: attempt.events.at(-1)?.sequence || 0 });
+      }
+      let fragmentQueue = Promise.resolve();
+      let renderedFragmentKey = null;
+
+      function runningAttempt(discussion) {
+        return discussion?.attempts?.find((attempt) => attempt.status === "running");
+      }
+
+      async function refreshDiscussion(basePly, attemptId = null, cursor = null, html = null) {
+        if (attemptId !== null) responseCursors.set(basePly, { attemptId, cursor });
+        const processed = responseCursors.get(basePly);
+        const query = processed ? `?attempt_id=${processed.attemptId}&cursor=${processed.cursor}` : "";
+        const key = `${basePly}${query}`;
+        fragmentQueue = fragmentQueue.catch(() => {}).then(async () => {
+          if (gameIndex !== basePly) return;
+          if (html !== null) {
+            htmx.swap(discussionContent, html, { swapStyle: "innerHTML", settleDelay: 0 });
+          } else {
+            await htmx.ajax("GET", `${trainerForm.action}/${basePly}/fragment${query}`, {
+              target: discussionContent, swap: "innerHTML",
+            });
+          }
+          if (gameIndex !== basePly) {
+            discussionContent.hidden = true;
+            renderedFragmentKey = null;
+            renderDiscussion();
+            return;
+          }
+          const data = discussionContent.querySelector("[data-discussion-board]");
+          if (!data) throw new Error("Could not reload the Discussion.");
+          trainerData.discussions[String(basePly)] = JSON.parse(data.textContent);
+          renderedFragmentKey = key;
+          if (gameIndex === basePly) {
+            const discussion = trainerData.discussions[String(basePly)];
+            if (attemptId !== null && cursor > 0 && discussion.attempts.at(-1)?.events.at(-1)?.type === "move") {
+              navigationMode = "discussion";
+              bestLinePreview = null;
+              previewPanel.hidden = true;
+              gameModeButton.setAttribute("aria-pressed", "false");
+              discussionModeButton.setAttribute("aria-pressed", "true");
+              showPosition(discussion.moves.length);
+            } else showPosition(currentIndex);
+          }
+        });
+        return fragmentQueue;
+      }
+
+      function followResponse(basePly, attempt) {
+        if (responseStreams.has(attempt.id)) return;
+        const processed = responseCursors.get(basePly);
+        const after = processed?.attemptId === attempt.id ? processed.cursor : (attempt.events?.at(-1)?.sequence || 0);
+        const source = new EventSource(`${trainerForm.action}/${basePly}/attempts/${attempt.id}/events?after=${after}&render=true`);
+        responseStreams.set(attempt.id, source);
+        let updates = Promise.resolve();
+        source.onmessage = (event) => {
+          const visible = JSON.parse(event.data);
+          updates = updates.then(() => refreshDiscussion(basePly, attempt.id, visible.sequence, visible.html)).catch((error) => {
+            discussionError.textContent = error.message;
+            discussionError.hidden = false;
+          });
+          if (["completed", "interrupted", "failed", "limited"].includes(visible.type)) {
+            source.close();
+            responseStreams.delete(attempt.id);
+          }
+        };
+        source.onerror = () => {
+          discussionError.textContent = "Reconnecting to the saved Trainer response…";
+          discussionError.hidden = false;
+        };
+      }
+
+      trainerForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const basePly = gameIndex;
+        const body = new URLSearchParams(new FormData(trainerForm));
+        body.set("position", JSON.stringify(displayedPositionReference()));
+        body.set("revision", JSON.stringify(trainerData.discussions[String(basePly)]?.revision ?? null));
+        body.set("initial_moves", "[]");
+        body.set("stream", "true");
+        trainerForm.querySelector('[type="submit"]').disabled = true;
+        try {
+          const response = await fetch(trainerForm.action, { method: "POST", body });
+          if (!response.ok) throw new Error((await response.json()).detail || "Trainer request failed.");
+          const attempt = await response.json();
+          trainerForm.querySelector("textarea").value = "";
+          bestLinePreview = null;
+          previewPanel.hidden = true;
+          await refreshDiscussion(basePly, attempt.id, 0);
+          if (gameIndex === basePly) showDiscussion();
+          followResponse(basePly, attempt);
+        } catch (error) {
+          discussionError.textContent = error.message;
+          discussionError.hidden = false;
+        } finally {
+          renderDiscussion();
+        }
+      });
+
+      async function responseAction(action) {
+        const basePly = gameIndex;
+        const discussion = trainerData.discussions[String(basePly)];
+        const attempt = action === "interrupt" ? runningAttempt(discussion) : discussion?.attempts?.at(-1);
+        if (!attempt) return;
+        try {
+          const response = await fetch(`${trainerForm.action}/${basePly}/attempts/${attempt.id}/${action}`, { method: "POST" });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Trainer request failed.");
+          if (action === "retry") {
+            await refreshDiscussion(basePly, result.id, 0);
+            followResponse(basePly, result);
+          }
+        } catch (error) {
+          discussionError.textContent = error.message;
+          discussionError.hidden = false;
+        }
+      }
+      interruptButton.addEventListener("click", () => responseAction("interrupt"));
+      retryButton.addEventListener("click", () => responseAction("retry"));
+      document.querySelector("#trainer-consent").addEventListener("change", async (event) => {
+        const checkbox = event.target;
+        const submit = trainerForm.querySelector('[type="submit"]');
+        const wasDisabled = submit.disabled;
+        submit.disabled = true;
+        checkbox.disabled = true;
+        try {
+          const response = await fetch("/trainer/consent", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ accepted: checkbox.checked }),
+          });
+          if (!response.ok) throw new Error("Consent was not saved.");
+        } catch {
+          event.target.checked = !event.target.checked;
+          alert("Could not save Trainer consent. Please try again.");
+        } finally {
+          checkbox.disabled = false;
+          submit.disabled = wasDisabled;
+        }
+      });
+      const basePlyInput = document.querySelector('[name="base_ply"]');
+      const initialMovesInput = document.querySelector('[name="initial_moves"]');
+      const bestLineButton = document.querySelector('[data-action="best-line"]');
+      const practicalLineButton = document.querySelector('[data-action="practical-line"]');
+      const returnToGameButton = document.querySelector('[data-action="return-to-game"]');
+      const gameModeButton = document.querySelector('[data-navigation-mode="game"]');
+      const discussionModeButton = document.querySelector('[data-navigation-mode="discussion"]');
+      const previewPanel = document.querySelector(".best-line-preview");
+      const previewError = document.querySelector("[data-best-line-error]");
+      const adoptPreviewButton = document.querySelector('[data-action="adopt-preview"]');
       let currentIndex = 0;
+      let gameIndex = 0;
+      let navigationMode = "game";
+      let bestLinePreview = null;
       let chess = new Chess(navigation.positions[0].fen);
+      let exploredMoves = [];
+      let discussionMutationPending = false;
+
+      function discussionPath(discussion, nodeId) {
+        const path = [];
+        while (nodeId !== null) {
+          const node = discussion.nodes.find((item) => item.id === nodeId);
+          path.unshift(node);
+          nodeId = node.parentId;
+        }
+        return path;
+      }
+
+      function displayedNodeId(discussion) {
+        return currentIndex === 0 ? null : discussionPath(discussion, discussion.activeNodeId)[currentIndex - 1].id;
+      }
 
       function legalDests(game) {
         const dests = new Map();
@@ -187,6 +459,9 @@
       }
 
       function movableConfig() {
+        if (discussionMutationPending || runningAttempt(trainerData.discussions[String(gameIndex)])) {
+          return { color: undefined, free: false, dests: new Map() };
+        }
         return {
           color: chess.turn() === "w" ? "white" : "black",
           free: false,
@@ -206,13 +481,76 @@
         return [uci.slice(0, 2), uci.slice(2, 4)];
       }
 
+      async function continueDiscussionMove(orig, dest) {
+        if (discussionMutationPending) return;
+        const discussion = trainerData.discussions[String(gameIndex)];
+        const parentId = navigationMode === "discussion" ? displayedNodeId(discussion) : null;
+        const legalMove = chess
+          .moves({ square: orig, verbose: true })
+          .find((move) => move.to === dest);
+        if (!legalMove) return;
+        chess.move({ from: orig, to: dest, promotion: legalMove.promotion });
+        const uci = chess.history({ verbose: true }).at(-1).lan;
+        await mutateDiscussion("/moves", "POST", { uci, parentId, revision: discussion.revision });
+      }
+
+      async function mutateDiscussion(path, method, body) {
+        if (discussionMutationPending || runningAttempt(trainerData.discussions[String(gameIndex)])) return;
+        const basePly = gameIndex;
+        discussionMutationPending = true;
+        discussionError.hidden = true;
+        ground.set({ movable: movableConfig() });
+        renderDiscussion();
+        try {
+          const response = await fetch(`${trainerForm.action}/${basePly}${path}`, {
+            method,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (!response.ok) {
+            const error = await response.json();
+            if (response.status === 409) window.location.reload();
+            throw new Error(error.detail || "Discussion could not be updated.");
+          }
+          if (method === "DELETE") {
+            responseCursors.delete(basePly);
+            renderedFragmentKey = null;
+            delete trainerData.discussions[String(basePly)];
+            if (gameIndex === basePly) showGamePosition(basePly);
+          } else {
+            responseCursors.delete(basePly);
+            renderedFragmentKey = null;
+            const result = await response.json();
+            trainerData.discussions[String(basePly)] = result;
+            if (gameIndex === basePly) showDiscussion();
+          }
+        } catch (error) {
+          discussionError.textContent = error.message;
+          discussionError.hidden = false;
+        } finally {
+          discussionMutationPending = false;
+          showPosition(currentIndex);
+        }
+      }
+
       function exploreMove(orig, dest) {
+        if (bestLinePreview) {
+          const move = chess.moves({ square: orig, verbose: true }).find((item) => item.to === dest);
+          if (move) adoptPreview(orig + dest + (move.promotion || ""));
+          return;
+        }
+        if (trainerData.discussions[String(gameIndex)]) {
+          continueDiscussionMove(orig, dest);
+          return;
+        }
         const legalMove = chess
           .moves({ square: orig, verbose: true })
           .find((move) => move.to === dest);
         if (!legalMove) return;
         const promotion = legalMove.promotion;
         chess.move({ from: orig, to: dest, promotion });
+        exploredMoves.push(chess.history({ verbose: true }).at(-1).lan);
+        initialMovesInput.value = JSON.stringify(exploredMoves);
         ground.set({
           fen: chess.fen(),
           lastMove: [orig, dest],
@@ -224,10 +562,21 @@
       }
 
       function showPosition(index) {
-        currentIndex = Math.max(0, Math.min(index, navigation.positions.length - 1));
-        const position = navigation.positions[currentIndex];
-        const highlights = navigation.moments[String(currentIndex)];
+        const discussion = trainerData.discussions[String(gameIndex)];
+        const positions = bestLinePreview
+          ? [{ fen: bestLinePreview.startingFen, lastMove: null }, ...bestLinePreview.moves.map((move) => ({ fen: move.fen, lastMove: move.uci }))]
+          : navigationMode === "discussion" && discussion
+            ? [{ fen: discussion.baseFen, lastMove: null }, ...discussion.moves.map((move) => ({ fen: move.fen, lastMove: move.uci }))]
+            : navigation.positions;
+        currentIndex = Math.max(0, Math.min(index, positions.length - 1));
+        adoptPreviewButton.disabled = currentIndex === 0 || discussionMutationPending || Boolean(runningAttempt(discussion));
+        if (!bestLinePreview && navigationMode === "game") gameIndex = currentIndex;
+        const position = positions[currentIndex];
+        const highlights = bestLinePreview || navigationMode !== "game" ? undefined : navigation.moments[String(currentIndex)];
         chess = new Chess(position.fen);
+        exploredMoves = [];
+        basePlyInput.value = String(gameIndex);
+        initialMovesInput.value = "[]";
         ground.set({
           fen: position.fen,
           lastMove: highlights || !position.lastMove ? undefined : squares(position.lastMove),
@@ -242,21 +591,102 @@
           : [];
         ground.setAutoShapes(shapes);
         previous.disabled = currentIndex === 0;
-        next.disabled = currentIndex === navigation.positions.length - 1;
-        status.value = currentIndex === 0
-          ? "Start"
-          : `Ply ${currentIndex} of ${navigation.positions.length - 1}`;
+        next.disabled = currentIndex === positions.length - 1;
+        status.value = bestLinePreview
+          ? `Best Line preview · ${currentIndex} of ${positions.length - 1}`
+          : navigationMode === "discussion"
+            ? `Discussion · ${currentIndex} of ${positions.length - 1}`
+          : currentIndex === 0
+            ? "Start"
+            : `Ply ${currentIndex} of ${positions.length - 1}`;
         for (const moment of moments) {
-          const selected = Number(moment.dataset.positionIndex) === currentIndex;
+          const selected = !bestLinePreview && navigationMode === "game" && Number(moment.dataset.positionIndex) === currentIndex;
           moment.classList.toggle("is-selected", selected);
           moment.querySelector("button").setAttribute("aria-pressed", String(selected));
         }
         for (const point of document.querySelectorAll(".evaluation-point")) {
           point.classList.toggle(
             "is-selected",
-            Number(point.dataset.positionIndex) === currentIndex,
+            !bestLinePreview && navigationMode === "game" && Number(point.dataset.positionIndex) === currentIndex,
           );
         }
+        renderDiscussion();
+      }
+
+      function renderDiscussion() {
+        const discussion = trainerData.discussions[String(gameIndex)];
+        const running = runningAttempt(discussion);
+        const lastAttempt = discussion?.attempts?.at(-1);
+        interruptButton.hidden = !running;
+        retryButton.hidden = !lastAttempt || !["failed", "interrupted", "limited"].includes(lastAttempt.status);
+        trainerForm.querySelector('[type="submit"]').disabled = Boolean(running) || {{ (not trainer_availability.is_available) | tojson }};
+        practicalLineButton.disabled = discussionMutationPending || Boolean(running) || {{ (not trainer_availability.is_available) | tojson }};
+        deleteDiscussionButton.hidden = !discussion;
+        deleteDiscussionButton.disabled = discussionMutationPending || Boolean(running);
+        discussionModeButton.disabled = !discussion;
+        trainerForm.hidden = false;
+        if (!discussion) {
+          discussionContent.hidden = true;
+          return;
+        }
+        discussionContent.hidden = false;
+        const processed = responseCursors.get(gameIndex);
+        const key = `${gameIndex}${processed ? `?attempt_id=${processed.attemptId}&cursor=${processed.cursor}` : ""}`;
+        if (renderedFragmentKey !== key) {
+          renderedFragmentKey = key;
+          refreshDiscussion(gameIndex).catch((error) => { discussionError.textContent = error.message; discussionError.hidden = false; });
+        }
+        for (const branch of discussionContent.querySelectorAll("[data-node-id]")) branch.disabled = discussionMutationPending;
+      }
+
+      discussionContent.addEventListener("click", async (event) => {
+          const branch = event.target.closest("[data-node-id]");
+          if (!branch || discussionMutationPending) return;
+          const discussion = trainerData.discussions[String(gameIndex)];
+          const nodeId = branch.dataset.nodeId ? Number(branch.dataset.nodeId) : null;
+          const node = discussion.nodes.find((item) => item.id === nodeId);
+          const running = runningAttempt(discussion);
+            showDiscussion();
+            if (running) {
+              // Local selection is read-only: never change the authoritative active node.
+              const path = discussionPath(discussion, nodeId);
+              const selected = node || { fen: discussion.baseFen };
+              chess = new Chess(selected.fen);
+              ground.set({ fen: selected.fen, movable: movableConfig() });
+              status.value = `Discussion · read-only · ${path.map((move) => move.san).join(" ") || "Base Position"}`;
+              return;
+            }
+            await mutateDiscussion("/selection", "POST", { revision: discussion.revision, nodeId });
+      });
+
+      function selectTab(name) {
+        for (const [index, tab] of tabs.entries()) {
+          const selected = (index === 0 ? "analysis" : "trainer") === name;
+          tab.setAttribute("aria-selected", String(selected));
+          panels[index].hidden = !selected;
+        }
+      }
+
+      function showGamePosition(index) {
+        bestLinePreview = null;
+        navigationMode = "game";
+        gameModeButton.setAttribute("aria-pressed", "true");
+        discussionModeButton.setAttribute("aria-pressed", "false");
+        previewPanel.hidden = true;
+        returnToGameButton.hidden = true;
+        showPosition(index);
+      }
+
+      function showDiscussion() {
+        const discussion = trainerData.discussions[String(gameIndex)];
+        if (!discussion) return;
+        bestLinePreview = null;
+        navigationMode = "discussion";
+        gameModeButton.setAttribute("aria-pressed", "false");
+        discussionModeButton.setAttribute("aria-pressed", "true");
+        previewPanel.hidden = true;
+        returnToGameButton.hidden = true;
+        showPosition(discussion.moves.length);
       }
 
       function renderEvaluationCurve() {
@@ -285,11 +715,11 @@
             "aria-label",
             `${point.positionIndex === 0 ? "Start" : `Ply ${point.positionIndex}`}: ${point.winPercent}% Player Win`,
           );
-          marker.addEventListener("click", () => showPosition(point.positionIndex));
+          marker.addEventListener("click", () => showGamePosition(point.positionIndex));
           marker.addEventListener("keydown", (event) => {
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
-              showPosition(point.positionIndex);
+              showGamePosition(point.positionIndex);
             }
           });
           curve.append(marker);
@@ -298,14 +728,127 @@
 
       previous.addEventListener("click", () => showPosition(currentIndex - 1));
       next.addEventListener("click", () => showPosition(currentIndex + 1));
+      async function adoptPreview(uci = null) {
+        if (!bestLinePreview || discussionMutationPending || runningAttempt(trainerData.discussions[String(gameIndex)])) return false;
+        const basePly = gameIndex;
+        const body = { previewId: bestLinePreview.previewId, plies: currentIndex, uci };
+        discussionMutationPending = true;
+        ground.set({ movable: movableConfig() });
+        try {
+          const response = await fetch(`${trainerForm.action}/${basePly}/adopt-preview`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Preview could not be adopted.");
+          trainerData.discussions[String(basePly)] = result;
+          responseCursors.delete(basePly);
+          renderedFragmentKey = null;
+          showDiscussion();
+          return true;
+        } catch (error) {
+          discussionError.textContent = error.message;
+          discussionError.hidden = false;
+          return false;
+        } finally {
+          discussionMutationPending = false;
+          showPosition(currentIndex);
+        }
+      }
+      adoptPreviewButton.addEventListener("click", () => adoptPreview());
+      function displayedPositionReference() {
+        const discussion = trainerData.discussions[String(gameIndex)];
+        if (bestLinePreview) return { kind: "preview", preview_id: bestLinePreview.previewId, ply: currentIndex };
+        if (navigationMode === "discussion" && discussion) return { kind: "variation", node_id: displayedNodeId(discussion) };
+        if (exploredMoves.length) return { kind: "exploration", ply: gameIndex, moves: exploredMoves };
+        return { kind: "game", ply: gameIndex };
+      }
+      practicalLineButton.addEventListener("click", async () => {
+        const basePly = gameIndex;
+        const discussion = trainerData.discussions[String(basePly)];
+        const position = displayedPositionReference();
+        practicalLineButton.disabled = true;
+        selectTab("trainer");
+        try {
+          const response = await fetch(`/analyses/{{ origin }}/{{ origin_id }}/practical-line`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ply: basePly, position, revision: discussion?.revision ?? null,
+              initial_moves: [] }),
+          });
+          const attempt = await response.json();
+          if (!response.ok) throw new Error(attempt.detail || "Practical Line unavailable.");
+          bestLinePreview = null;
+          previewPanel.hidden = true;
+          exploredMoves = [];
+          await refreshDiscussion(basePly, attempt.id, 0);
+          if (gameIndex === basePly) showDiscussion();
+          followResponse(basePly, attempt);
+        } catch (error) {
+          discussionError.textContent = error.message;
+          discussionError.hidden = false;
+        } finally {
+          renderDiscussion();
+        }
+      });
+      bestLineButton.addEventListener("click", async () => {
+        bestLineButton.disabled = true;
+        previewError.hidden = true;
+        try {
+          const position = displayedPositionReference();
+          const response = await fetch(bestLineButton.dataset.url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ply: gameIndex, position }),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Best Line unavailable.");
+          bestLinePreview = result;
+          previewPanel.querySelector("[data-preview-score]").textContent =
+            `Player score: ${result.score.kind} ${result.score.value}`;
+          previewPanel.querySelector("[data-preview-moves]").textContent =
+            result.moves.map((move) => move.san).join(" ") || "No moves available.";
+          const parameters = Object.entries(result.provenance.parameters)
+            .map(([name, value]) => `${name}: ${value}`)
+            .join(", ");
+          previewPanel.querySelector("[data-preview-provenance]").textContent =
+            `Evaluator: ${result.provenance.name}${result.provenance.version ? ` ${result.provenance.version}` : ""} (${result.provenance.sourceKind}${parameters ? `; ${parameters}` : ""})`;
+          previewPanel.hidden = false;
+          returnToGameButton.hidden = false;
+          showPosition(0);
+        } catch (error) {
+          previewError.textContent = error.message;
+          previewError.hidden = false;
+        } finally {
+          bestLineButton.disabled = false;
+        }
+      });
+      returnToGameButton.addEventListener("click", () => showGamePosition(gameIndex));
+      gameModeButton.addEventListener("click", () => showGamePosition(gameIndex));
+      discussionModeButton.addEventListener("click", showDiscussion);
+      deleteDiscussionButton.addEventListener("click", async () => {
+        const discussion = trainerData.discussions[String(gameIndex)];
+        if (!discussion || !window.confirm("Delete this Discussion, its messages, evidence and all Variations?")) return;
+        await mutateDiscussion("", "DELETE", { revision: discussion.revision, confirmed: true });
+      });
       for (const moment of moments) {
         moment.querySelector("button").addEventListener(
           "click",
-          () => showPosition(Number(moment.dataset.positionIndex)),
+          () => showGamePosition(Number(moment.dataset.positionIndex)),
         );
       }
+      tabs[0].addEventListener("click", () => selectTab("analysis"));
+      tabs[1].addEventListener("click", () => {
+        selectTab("trainer");
+        if (trainerData.discussions[String(gameIndex)]) showDiscussion();
+      });
       renderEvaluationCurve();
-      showPosition(0);
+      const query = new URLSearchParams(window.location.search);
+      showGamePosition(Number(query.get("ply") || 0));
+      selectTab(query.has("trainer") ? "trainer" : "analysis");
+      if (query.has("trainer") && trainerData.discussions[String(gameIndex)]) showDiscussion();
+      for (const [basePly, discussion] of Object.entries(trainerData.discussions)) {
+        const running = runningAttempt(discussion);
+        if (running) followResponse(Number(basePly), running);
+      }
     </script>
   </body>
 </html>
