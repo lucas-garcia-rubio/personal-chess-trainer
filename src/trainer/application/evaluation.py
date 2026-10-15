@@ -163,6 +163,19 @@ class EvaluatePosition:
         self.storage.adopt_evaluator_line(*key, preview.revision, preview.parent_id, preview.base_fen, moves)
         return get_discussion(self.storage, *key)
 
+    def adopt_position(self, origin: str, origin_id: str, base_ply: int, *,
+                       preview_id: str, plies: int) -> None:
+        preview = self._preview((origin, origin_id, base_ply), preview_id)
+        if plies or preview.prefix:
+            self.adopt(origin, origin_id, base_ply, preview_id=preview_id, plies=plies, uci=None)
+            return
+        discussion = next((d for d in self.storage.list_discussions(origin, origin_id)
+                           if d.base_ply == base_ply), None)
+        if (discussion.revision if discussion else None) != preview.revision:
+            raise DiscussionConflict
+        if discussion:
+            self.storage.select_discussion_node(origin, origin_id, base_ply, discussion.revision, preview.parent_id)
+
     def __call__(self, origin: str, origin_id: str, fen: str) -> dict[str, object]:
         analysis = self.storage.get_analysis(origin, origin_id)
         if analysis is None:

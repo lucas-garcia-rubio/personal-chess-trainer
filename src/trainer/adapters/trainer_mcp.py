@@ -11,11 +11,12 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 import uvicorn
 
-from trainer.application.discussions import PlayTrainerLine
+from trainer.application.discussions import PlayTrainerLine, get_discussion, node_fen
 from trainer.application.evaluation import EvaluatePosition, EvaluationLimit
 from trainer.application.ports import DiscussionConflict
 from trainer.application.responses import DiscussionResponses
 from trainer.application.trainer_response import ReadDiscussionContext
+from trainer.application.practical_line import record_practical_line
 
 
 @runtime_checkable
@@ -121,7 +122,9 @@ class TrainerMCP:
                             raise ValueError("Unknown tool")
                         key = self.responses.running_key(parsed.attempt_id)
                         if isinstance(parsed, LineArguments):
+                            starting_fen = node_fen(get_discussion(self.responses.storage, *key), parsed.active_node_id)
                             PlayTrainerLine(self.responses.storage)(*key, **parsed.model_dump())
+                            record_practical_line(self.responses.storage, key, parsed.attempt_id, starting_fen, parsed.moves)
                         if isinstance(parsed, EvaluationArguments):
                             try:
                                 context = self.evaluate.consult(*key, attempt_id=parsed.attempt_id,

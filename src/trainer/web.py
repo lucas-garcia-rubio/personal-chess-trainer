@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from trainer.adapters.opencode import OpenCodeRuntime
 from trainer.adapters.trainer_mcp import MCPRuntime, PositionArguments, TrainerMCP
@@ -40,6 +40,7 @@ from trainer.application.discussions import (
 )
 from trainer.application.sync import SyncGames
 from trainer.application.responses import DiscussionResponses
+from trainer.application.practical_line import PRACTICAL_LINE_REQUEST
 from trainer.application.evaluation import BestLineUnavailable, EvaluatePosition
 from trainer.domain import Analysis, Discussion, DiscussionMessage, win_percent
 
@@ -73,6 +74,10 @@ def _discussion_document(discussion: Discussion, attempts: list[ResponseAttempt]
         "evidence": [
             {"attemptId": attempt.id, **json.loads(cast(str, event["text"]))}
             for attempt in attempts or [] for event in attempt.events if event["type"] == "evidence"
+        ],
+        "practicalLines": [
+            {"attemptId": attempt.id, **json.loads(cast(str, event["text"]))}
+            for attempt in attempts or [] for event in attempt.events if event["type"] == "practical_line"
         ],
         "baseFen": discussion.base_fen,
         "revision": discussion.revision,
@@ -112,6 +117,11 @@ class _AdoptPreviewRequest(BaseModel):
     previewId: str
     plies: int
     uci: str | None = None
+
+
+class _PracticalLineRequest(_BestLineRequest):
+    revision: int | None = None
+    initial_moves: list[str] = Field(default_factory=list, max_length=12)
 
 
 class _PlayerMoveRequest(BaseModel):
@@ -196,8 +206,8 @@ def create_web_app(
     continue_discussion: ContinueDiscussion,
     candidate_evaluator: CandidateEvaluator | None = None,
 ) -> FastAPI:
-    responses = DiscussionResponses(storage, trainer_runtime)
     evaluations = EvaluatePosition(storage, candidate_evaluator)
+    responses = DiscussionResponses(storage, trainer_runtime, evaluations)
     mcp = TrainerMCP(responses, evaluations)
     if isinstance(trainer_runtime, MCPRuntime):
         trainer_runtime.configure_mcp("http://127.0.0.1/trainer/mcp", mcp.token)
@@ -442,6 +452,47 @@ def create_web_app(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return JSONResponse(attempt_document(origin, origin_id, base_ply, attempt), status_code=202)
+
+    @app.post("/analyses/{origin}/{origin_id}/practical-line")
+    def practical_line(origin: str, origin_id: str, selection: _PracticalLineRequest) -> Response:
+        if not storage.trainer_consent():
+            raise HTTPException(status_code=403, detail="Trainer consent is required.")
+        if not trainer_availability.is_available:
+            raise HTTPException(status_code=503, detail="Trainer unavailable.")
+        position = selection.position or PositionArguments(kind="game", ply=selection.ply)
+        key = (origin, origin_id, selection.ply)
+        try:
+            with responses.lock:
+                if any(a.status == "running" for a in storage.response_attempts(*key)):
+                    raise DiscussionConflict
+                existing = next((d for d in storage.list_discussions(origin, origin_id)
+                                 if d.base_ply == selection.ply), None)
+                if (existing.revision if existing else None) != selection.revision:
+                    raise DiscussionConflict
+                evaluations.resolve(*key, **position.model_dump())
+                if position.kind == "game" and position.ply != selection.ply:
+                    raise ValueError("Game Position must match the Base Position")
+                if selection.initial_moves and (existing or position.kind != "game"):
+                    raise ValueError("Initial moves are only valid before Discussion creation")
+                if position.kind == "preview":
+                    assert position.preview_id is not None and position.ply is not None
+                    # At preview ply zero, its underlying anchor still needs selecting.
+                    evaluations.adopt_position(*key, preview_id=position.preview_id, plies=position.ply)
+                existing = next((d for d in storage.list_discussions(origin, origin_id)
+                                 if d.base_ply == selection.ply), None)
+                start_discussion(origin=origin, origin_id=origin_id, base_ply=selection.ply,
+                                 message=PRACTICAL_LINE_REQUEST, initial_moves=selection.initial_moves)
+                if existing:
+                    if position.kind != "preview":
+                        SelectDiscussionNode(storage)(origin=origin, origin_id=origin_id, base_ply=selection.ply,
+                                                      revision=existing.revision, node_id=position.node_id)
+                    storage.append_discussion_message(*key, DiscussionMessage("player", PRACTICAL_LINE_REQUEST))
+                attempt = responses.start(*key)
+        except DiscussionConflict as error:
+            raise HTTPException(status_code=409, detail="Discussion changed or Trainer is responding.") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return JSONResponse(attempt_document(*key, attempt), status_code=202)
 
     @app.post("/analyses/{origin}/{origin_id}/best-line")
     def best_line(

@@ -66,7 +66,7 @@
       .best-line-preview h2 { margin: 0 0 0.5rem; font-size: 1rem; }
       .best-line-preview p { margin: 0.35rem 0; }
       .best-line-error { color: #f09a7f; }
-      .evaluator-evidence { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid #58786b; border-radius: 0.4rem; }
+      .evaluator-evidence, .practical-line-evidence { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid #58786b; border-radius: 0.4rem; }
       .evaluator-evidence p { margin: 0.35rem 0; }
       .evaluation-panel {
         max-width: 32rem;
@@ -168,6 +168,7 @@
           </div>
           <div class="best-line-actions">
             <button type="button" data-action="best-line"{% if best_line_unavailable_reason %} disabled{% endif %} data-url="{{ best_line_url }}">Show Best Line</button>
+            <button type="button" data-action="practical-line"{% if not trainer_availability.is_available %} disabled{% endif %}>Mostrar linha prática</button>
             <button type="button" data-action="return-to-game" hidden>Return to Game</button>
           </div>
           <aside class="best-line-preview" hidden aria-live="polite">
@@ -226,6 +227,13 @@
             {% endif %}
             <div data-discussion-content>
               {% for ply, discussion in trainer_data.discussions.items() %}
+              {% for line in discussion.practicalLines %}
+              <article class="practical-line-evidence" data-base-ply="{{ ply }}" data-attempt-id="{{ line.attemptId }}">
+                <strong>Practical Line · {{ line.status }}</strong>
+                <p>{{ line.reason }}</p>
+                <p>Best Line: {% if line.bestScore %}{{ line.bestScore.kind }} {{ line.bestScore.value }}{% else %}unverified{% endif %} · Practical Line: {% if line.selectedScore %}{{ line.selectedScore.kind }} {{ line.selectedScore.value }}{% else %}unverified{% endif %} · Difference (cp, Player): {{ line.differenceCp if line.differenceCp is not none else 'not comparable' }}{% if line.isBestLine %} · Also the Best Line{% endif %}</p>
+              </article>
+              {% endfor %}
               {% for evidence in discussion.evidence %}
               <article class="evaluator-evidence" data-base-ply="{{ ply }}" data-attempt-id="{{ evidence.attemptId }}">
                 <strong>Evaluator evidence · Trainer response {{ evidence.attemptId }}</strong>
@@ -397,6 +405,7 @@
       const basePlyInput = document.querySelector('[name="base_ply"]');
       const initialMovesInput = document.querySelector('[name="initial_moves"]');
       const bestLineButton = document.querySelector('[data-action="best-line"]');
+      const practicalLineButton = document.querySelector('[data-action="practical-line"]');
       const returnToGameButton = document.querySelector('[data-action="return-to-game"]');
       const gameModeButton = document.querySelector('[data-navigation-mode="game"]');
       const discussionModeButton = document.querySelector('[data-navigation-mode="discussion"]');
@@ -595,6 +604,7 @@
         interruptButton.hidden = !running;
         retryButton.hidden = !lastAttempt || !["failed", "interrupted", "limited"].includes(lastAttempt.status);
         trainerForm.querySelector('[type="submit"]').disabled = Boolean(running) || {{ (not trainer_availability.is_available) | tojson }};
+        practicalLineButton.disabled = discussionMutationPending || Boolean(running) || {{ (not trainer_availability.is_available) | tojson }};
         deleteDiscussionButton.hidden = !discussion;
         deleteDiscussionButton.disabled = discussionMutationPending || Boolean(running);
         discussionModeButton.disabled = !discussion;
@@ -634,6 +644,13 @@
             line.textContent = `Player score: ${candidate.score.kind} ${candidate.score.value} · ${candidate.moves.map((move) => move.san).join(" ")}`;
             card.append(line);
           }
+          discussionContent.append(card);
+        }
+        for (const line of discussion.practicalLines || []) {
+          const card = document.createElement("article");
+          card.className = "practical-line-evidence";
+          const score = (value) => value ? `${value.kind} ${value.value}` : "unverified";
+          card.textContent = `Practical Line · ${line.status} · ${line.reason} Best Line: ${score(line.bestScore)} · Practical Line: ${score(line.selectedScore)} · Difference (cp, Player): ${line.differenceCp ?? "not comparable"}${line.isBestLine ? " · Also the Best Line" : ""}`;
           discussionContent.append(card);
         }
         if (discussion.moves.length) {
@@ -760,6 +777,37 @@
         }
       }
       adoptPreviewButton.addEventListener("click", () => adoptPreview());
+      practicalLineButton.addEventListener("click", async () => {
+        const basePly = gameIndex;
+        const discussion = trainerData.discussions[String(basePly)];
+        const position = bestLinePreview
+          ? { kind: "preview", preview_id: bestLinePreview.previewId, ply: currentIndex }
+          : navigationMode === "discussion" && discussion
+            ? { kind: "variation", node_id: displayedNodeId(discussion) }
+            : { kind: "game", ply: basePly };
+        practicalLineButton.disabled = true;
+        selectTab("trainer");
+        try {
+          const response = await fetch(`/analyses/{{ origin }}/{{ origin_id }}/practical-line`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ply: basePly, position, revision: discussion?.revision ?? null,
+              initial_moves: !discussion && !bestLinePreview ? exploredMoves : [] }),
+          });
+          const attempt = await response.json();
+          if (!response.ok) throw new Error(attempt.detail || "Practical Line unavailable.");
+          bestLinePreview = null;
+          previewPanel.hidden = true;
+          exploredMoves = [];
+          await refreshDiscussion(basePly);
+          if (gameIndex === basePly) showDiscussion();
+          followResponse(basePly, attempt);
+        } catch (error) {
+          discussionError.textContent = error.message;
+          discussionError.hidden = false;
+        } finally {
+          renderDiscussion();
+        }
+      });
       bestLineButton.addEventListener("click", async () => {
         bestLineButton.disabled = true;
         previewError.hidden = true;
