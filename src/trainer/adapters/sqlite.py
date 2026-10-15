@@ -4,7 +4,12 @@ import json
 from threading import RLock
 from typing import Literal, cast
 
-from trainer.application.ports import DiscussionConflict, GameIdentityConflict
+from trainer.application.ports import (
+    DiscussionConflict,
+    GameIdentityConflict,
+    ResponseAttempt,
+    TrainerEvent,
+)
 from trainer.domain import (
     Analysis,
     CriticalMoment,
@@ -28,6 +33,135 @@ class SQLiteStorage:
         self._connection.execute("PRAGMA journal_mode = WAL")
         self._connection.execute("PRAGMA busy_timeout = 5000")
         self._connection.execute("PRAGMA foreign_keys = ON")
+
+    def response_request(self, request_id: int) -> str:
+        with self._discussion_lock:
+            row = self._connection.execute(
+                "SELECT body FROM discussion_messages WHERE id = ? AND author = 'player'",
+                (request_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Trainer request not found")
+            return cast(str, row[0])
+
+    def response_attempts(
+        self, origin: str, origin_id: str, base_ply: int,
+    ) -> list[ResponseAttempt]:
+        with self._discussion_lock:
+            rows = self._connection.execute(
+                """SELECT a.id, a.request_id, a.retry_of, a.revision, a.status
+                FROM trainer_attempts a JOIN discussions d ON d.id = a.discussion_id
+                WHERE d.game_origin = ? AND d.game_origin_id = ? AND d.base_ply = ?
+                ORDER BY a.id""", (origin, origin_id, base_ply),
+            ).fetchall()
+            return [
+                ResponseAttempt(
+                    id=row[0], request_id=row[1], retry_of=row[2],
+                    revision=row[3], status=row[4],
+                    events=[
+                        {"sequence": seq, "type": kind, "text": text}
+                        for seq, kind, text in self._connection.execute(
+                            "SELECT sequence, kind, text FROM trainer_events WHERE attempt_id = ? ORDER BY sequence",
+                            (row[0],),
+                        )
+                    ],
+                )
+                for row in rows
+            ]
+
+    def begin_response(
+        self, origin: str, origin_id: str, base_ply: int,
+        retry_of: int | None = None,
+    ) -> ResponseAttempt:
+        with self._discussion_lock, self._connection:
+            row = self._connection.execute(
+                """SELECT id, revision FROM discussions
+                WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?""",
+                (origin, origin_id, base_ply),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Discussion not found")
+            discussion_id, revision = row
+            self._assert_not_responding(discussion_id)
+            if retry_of is None:
+                request = self._connection.execute(
+                    "SELECT id FROM discussion_messages WHERE discussion_id = ? AND author = 'player' ORDER BY id DESC LIMIT 1",
+                    (discussion_id,),
+                ).fetchone()
+            else:
+                request = self._connection.execute(
+                    "SELECT request_id FROM trainer_attempts WHERE id = ? AND discussion_id = ? AND status IN ('failed', 'interrupted', 'limited')",
+                    (retry_of, discussion_id),
+                ).fetchone()
+            if request is None:
+                raise ValueError("No retryable Trainer request")
+            cursor = self._connection.execute(
+                "INSERT INTO trainer_attempts (discussion_id, request_id, retry_of, revision, status) VALUES (?, ?, ?, ?, 'running')",
+                (discussion_id, request[0], retry_of, revision),
+            )
+            assert cursor.lastrowid is not None
+            attempt_id = cursor.lastrowid
+            self._connection.execute(
+                "INSERT INTO trainer_events VALUES (?, 1, 'running', '')", (attempt_id,),
+            )
+        return next(
+            a for a in self.response_attempts(origin, origin_id, base_ply)
+            if a.id == attempt_id
+        )
+
+    def record_response_event(self, attempt_id: int, event: TrainerEvent) -> None:
+        with self._discussion_lock, self._connection:
+            row = self._connection.execute(
+                "SELECT discussion_id, message_id, status FROM trainer_attempts WHERE id = ?", (attempt_id,),
+            ).fetchone()
+            if row is None or row[2] != "running":
+                return
+            discussion_id, message_id, _ = row
+            if event.type == "text" and event.text:
+                if message_id is None:
+                    message = self._connection.execute(
+                        "INSERT INTO discussion_messages (discussion_id, author, body) VALUES (?, 'trainer', ?)",
+                        (discussion_id, event.text),
+                    )
+                    message_id = message.lastrowid
+                    self._connection.execute(
+                        "UPDATE trainer_attempts SET message_id = ? WHERE id = ?",
+                        (message_id, attempt_id),
+                    )
+                else:
+                    self._connection.execute(
+                        "UPDATE discussion_messages SET body = body || ? WHERE id = ?",
+                        (event.text, message_id),
+                    )
+                self._connection.execute(
+                    "UPDATE discussions SET revision = revision + 1 WHERE id = ?",
+                    (discussion_id,),
+                )
+            if event.type in {"completed", "interrupted", "failed", "limited"}:
+                self._connection.execute(
+                    "UPDATE trainer_attempts SET status = ? WHERE id = ?",
+                    (event.type, attempt_id),
+                )
+            self._connection.execute(
+                """INSERT INTO trainer_events SELECT ?, COALESCE(MAX(sequence), 0) + 1, ?, ?
+                FROM trainer_events WHERE attempt_id = ?""", (attempt_id, event.type, event.text, attempt_id),
+            )
+
+    def recover_responses(self) -> None:
+        with self._discussion_lock:
+            ids = self._connection.execute(
+                "SELECT id FROM trainer_attempts WHERE status = 'running'",
+            ).fetchall()
+            for (attempt_id,) in ids:
+                self.record_response_event(attempt_id, TrainerEvent(
+                    "interrupted", "Application stopped during the response. Please try again.",
+                ))
+
+    def _assert_not_responding(self, discussion_id: int) -> None:
+        if self._connection.execute(
+            "SELECT id FROM trainer_attempts WHERE discussion_id = ? AND status = 'running'", (discussion_id,),
+        ).fetchone() is not None:
+            raise DiscussionConflict
 
     def save_game(
         self, raw_document: str, metadata: GameMetadata, analysis: Analysis
@@ -308,7 +442,9 @@ class SQLiteStorage:
         parent_id: int | None,
     ) -> None:
         with self._discussion_lock, self._connection:
-            discussion_id = self._advance_revision(origin, origin_id, base_ply, revision)
+            discussion_id = self._advance_revision(
+                origin, origin_id, base_ply, revision, trainer=move.author == "trainer",
+            )
             self._validate_node(discussion_id, parent_id)
             node = self._connection.execute(
                 """
@@ -333,7 +469,14 @@ class SQLiteStorage:
 
     def _advance_revision(
         self, origin: str, origin_id: str, base_ply: int, revision: int,
+        *, trainer: bool = False,
     ) -> int:
+        row = self._connection.execute(
+            "SELECT id FROM discussions WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?",
+            (origin, origin_id, base_ply),
+        ).fetchone()
+        if row is not None and not trainer:
+            self._assert_not_responding(row[0])
         updated = self._connection.execute(
             """
             UPDATE discussions SET revision = revision + 1

@@ -1,16 +1,23 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 from fastapi.testclient import TestClient
 
 from lichess_mock import LichessMock
-from trainer.application.ports import TrainerRuntimeAvailability
+from trainer.application.ports import ResponseControl, TrainerEvent, TrainerRuntimeAvailability
 from trainer.bootstrap import create_app
 from trainer.config import Settings
 
 
 @dataclass
 class FakeTrainerRuntime:
+    def stream(self, session_id: str, system: str, context: str,
+               control: ResponseControl | None = None) -> Iterator[TrainerEvent]:
+        raise AssertionError("Availability checks must not contact a model")
+
+    def abort(self, session_id: str) -> None:
+        raise AssertionError("Availability checks must not contact a model")
+
     availability: TrainerRuntimeAvailability
     starts: int = 0
     stops: int = 0
