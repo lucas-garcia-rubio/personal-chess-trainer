@@ -280,5 +280,45 @@ class SQLiteStorage:
                     (parent_id, discussion_id),
                 )
 
+    def append_discussion_move(
+        self,
+        origin: str,
+        origin_id: str,
+        base_ply: int,
+        move: VariationMove,
+    ) -> None:
+        with self._connection:
+            row = self._connection.execute(
+                """
+                SELECT id, active_node_id
+                FROM discussions
+                WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?
+                """,
+                (origin, origin_id, base_ply),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Discussion not found")
+            discussion_id, parent_id = row
+            node = self._connection.execute(
+                """
+                INSERT INTO variation_nodes (
+                    discussion_id, parent_id, author, move_uci, move_san,
+                    resulting_fen
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    discussion_id,
+                    parent_id,
+                    move.author,
+                    move.uci,
+                    move.san,
+                    move.resulting_fen,
+                ),
+            )
+            self._connection.execute(
+                "UPDATE discussions SET active_node_id = ? WHERE id = ?",
+                (node.lastrowid, discussion_id),
+            )
+
     def close(self) -> None:
         self._connection.close()

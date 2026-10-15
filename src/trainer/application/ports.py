@@ -2,7 +2,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from trainer.domain import Analysis, Discussion, EvaluationRun, GameMetadata, GameSummary
+from trainer.domain import (
+    Analysis,
+    Discussion,
+    EvaluationRun,
+    GameMetadata,
+    GameSummary,
+    VariationMove,
+)
 
 
 class GameIdentityConflict(RuntimeError):
@@ -64,6 +71,14 @@ class LocalStorage(Protocol):
 
     def create_discussion(
         self, origin: str, origin_id: str, discussion: Discussion
+    ) -> None: ...
+
+    def append_discussion_move(
+        self,
+        origin: str,
+        origin_id: str,
+        base_ply: int,
+        move: VariationMove,
     ) -> None: ...
 
     def close(self) -> None: ...
