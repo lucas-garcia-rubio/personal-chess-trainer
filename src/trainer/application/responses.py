@@ -8,14 +8,17 @@ from trainer.application.ports import (
     TrainerRuntime,
 )
 from trainer.application.trainer_response import RespondToDiscussion
+from trainer.application.evaluation import EvaluatePosition
 
 
 class DiscussionResponses:
     """Own execution independently of browser connections; SQLite owns the visible log."""
 
-    def __init__(self, storage: LocalStorage, runtime: TrainerRuntime) -> None:
+    def __init__(self, storage: LocalStorage, runtime: TrainerRuntime,
+                 evaluations: EvaluatePosition) -> None:
         self.storage = storage
         self.runtime = runtime
+        self.evaluations = evaluations
         self.lock = RLock()
         self._workers: dict[int, Thread] = {}
         self._keys: dict[int, tuple[str, str, int]] = {}
@@ -38,7 +41,7 @@ class DiscussionResponses:
     def _run(self, initial: ResponseAttempt, key: tuple[str, str, int]) -> None:
         attempt_id = initial.id
         try:
-            for event in RespondToDiscussion(self.storage, self.runtime).stream(
+            for event in RespondToDiscussion(self.storage, self.runtime, self.evaluations).stream(
                 *key, initial, self._controls[attempt_id],
             ):
                 with self.lock:
