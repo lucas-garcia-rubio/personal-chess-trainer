@@ -227,6 +227,9 @@
               stored locally and can be revoked here to block new sends.</p>
             <label><input type="checkbox" id="trainer-consent"{% if trainer_consent %} checked{% endif %}>
               I consent to sending this data through OpenCode.</label>
+            <div data-discussion-branches aria-label="Discussion Variations"></div>
+            <button type="button" data-action="delete-discussion" hidden>Delete Discussion</button>
+            <p data-discussion-error role="status" hidden></p>
             <form class="trainer-form" method="post" action="/analyses/{{ origin }}/{{ origin_id }}/discussions">
               <input type="hidden" name="base_ply" value="0">
               <input type="hidden" name="initial_moves" value="[]">
@@ -255,6 +258,9 @@
       const tabs = [...document.querySelectorAll('[role="tab"]')];
       const panels = [...document.querySelectorAll('[role="tabpanel"]')];
       const discussionContent = document.querySelector("[data-discussion-content]");
+      const discussionBranches = document.querySelector("[data-discussion-branches]");
+      const deleteDiscussionButton = document.querySelector('[data-action="delete-discussion"]');
+      const discussionError = document.querySelector("[data-discussion-error]");
       const trainerForm = document.querySelector(".trainer-form");
       document.querySelector("#trainer-consent").addEventListener("change", async (event) => {
         const response = await fetch("/trainer/consent", {
@@ -280,6 +286,21 @@
       let bestLinePreview = null;
       let chess = new Chess(navigation.positions[0].fen);
       let exploredMoves = [];
+      let discussionMutationPending = false;
+
+      function discussionPath(discussion, nodeId) {
+        const path = [];
+        while (nodeId !== null) {
+          const node = discussion.nodes.find((item) => item.id === nodeId);
+          path.unshift(node);
+          nodeId = node.parentId;
+        }
+        return path;
+      }
+
+      function displayedNodeId(discussion) {
+        return currentIndex === 0 ? null : discussionPath(discussion, discussion.activeNodeId)[currentIndex - 1].id;
+      }
 
       function legalDests(game) {
         const dests = new Map();
@@ -292,10 +313,7 @@
       }
 
       function movableConfig() {
-        const discussion = trainerData.discussions[String(gameIndex)];
-        const atDiscussionEnd = discussion && currentIndex === discussion.moves.length;
-        const canMove = navigationMode !== "discussion" || atDiscussionEnd;
-        if (!canMove) {
+        if (discussionMutationPending) {
           return { color: undefined, free: false, dests: new Map() };
         }
         return {
@@ -318,25 +336,51 @@
       }
 
       async function continueDiscussionMove(orig, dest) {
+        if (discussionMutationPending) return;
+        const discussion = trainerData.discussions[String(gameIndex)];
+        const parentId = displayedNodeId(discussion);
         const legalMove = chess
           .moves({ square: orig, verbose: true })
           .find((move) => move.to === dest);
         if (!legalMove) return;
         chess.move({ from: orig, to: dest, promotion: legalMove.promotion });
         const uci = chess.history({ verbose: true }).at(-1).lan;
-        const response = await fetch(`${trainerForm.action}/${gameIndex}/moves`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ uci }),
-        });
-        const result = await response.json();
-        if (!response.ok) {
-          showPosition(currentIndex);
-          return;
-        }
-        trainerData.discussions[String(gameIndex)] = result;
+        await mutateDiscussion("/moves", "POST", { uci, parentId, revision: discussion.revision });
+      }
+
+      async function mutateDiscussion(path, method, body) {
+        if (discussionMutationPending) return;
+        const basePly = gameIndex;
+        discussionMutationPending = true;
+        discussionError.hidden = true;
+        ground.set({ movable: movableConfig() });
         renderDiscussion();
-        showPosition(result.moves.length);
+        try {
+          const response = await fetch(`${trainerForm.action}/${basePly}${path}`, {
+            method,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (!response.ok) {
+            const error = await response.json();
+            if (response.status === 409) window.location.reload();
+            throw new Error(error.detail || "Discussion could not be updated.");
+          }
+          if (method === "DELETE") {
+            delete trainerData.discussions[String(basePly)];
+            if (gameIndex === basePly) showGamePosition(basePly);
+          } else {
+            const result = await response.json();
+            trainerData.discussions[String(basePly)] = result;
+            if (gameIndex === basePly) showPosition(result.moves.length);
+          }
+        } catch (error) {
+          discussionError.textContent = error.message;
+          discussionError.hidden = false;
+        } finally {
+          discussionMutationPending = false;
+          showPosition(currentIndex);
+        }
       }
 
       function exploreMove(orig, dest) {
@@ -372,7 +416,7 @@
         currentIndex = Math.max(0, Math.min(index, positions.length - 1));
         if (!bestLinePreview && navigationMode === "game") gameIndex = currentIndex;
         const position = positions[currentIndex];
-        const highlights = bestLinePreview ? undefined : navigation.moments[String(currentIndex)];
+        const highlights = bestLinePreview || navigationMode !== "game" ? undefined : navigation.moments[String(currentIndex)];
         chess = new Chess(position.fen);
         exploredMoves = [];
         basePlyInput.value = String(gameIndex);
@@ -415,7 +459,10 @@
 
       function renderDiscussion() {
         discussionContent.replaceChildren();
+        discussionBranches.replaceChildren();
         const discussion = trainerData.discussions[String(gameIndex)];
+        deleteDiscussionButton.hidden = !discussion;
+        deleteDiscussionButton.disabled = discussionMutationPending;
         discussionModeButton.disabled = !discussion;
         trainerForm.hidden = false;
         if (!discussion) {
@@ -435,6 +482,19 @@
           line.className = "discussion-entry";
           line.textContent = `Player Variation: ${discussion.moves.map((move) => move.san).join(" ")}`;
           discussionContent.append(line);
+        }
+        for (const node of [null, ...discussion.nodes]) {
+          const nodeId = node ? node.id : null;
+          const branch = document.createElement("button");
+          branch.type = "button";
+          branch.textContent = node ? discussionPath(discussion, nodeId).map((move) => move.san).join(" ") : "Base Position";
+          branch.setAttribute("aria-pressed", String(discussion.activeNodeId === nodeId));
+          branch.disabled = discussionMutationPending;
+          branch.addEventListener("click", async () => {
+            showDiscussion();
+            await mutateDiscussion("/selection", "POST", { revision: discussion.revision, nodeId });
+          });
+          discussionBranches.append(branch);
         }
       }
 
@@ -541,6 +601,11 @@
       returnToGameButton.addEventListener("click", () => showGamePosition(gameIndex));
       gameModeButton.addEventListener("click", () => showGamePosition(gameIndex));
       discussionModeButton.addEventListener("click", showDiscussion);
+      deleteDiscussionButton.addEventListener("click", async () => {
+        const discussion = trainerData.discussions[String(gameIndex)];
+        if (!discussion || !window.confirm("Delete this Discussion, its messages, evidence and all Variations?")) return;
+        await mutateDiscussion("", "DELETE", { revision: discussion.revision, confirmed: true });
+      });
       for (const moment of moments) {
         moment.querySelector("button").addEventListener(
           "click",

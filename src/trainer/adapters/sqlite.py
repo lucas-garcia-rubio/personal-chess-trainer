@@ -1,9 +1,10 @@
 import sqlite3
 from pathlib import Path
 import json
+from threading import RLock
 from typing import Literal, cast
 
-from trainer.application.ports import GameIdentityConflict
+from trainer.application.ports import DiscussionConflict, GameIdentityConflict
 from trainer.domain import (
     Analysis,
     CriticalMoment,
@@ -16,11 +17,13 @@ from trainer.domain import (
     PositionEvaluation,
     ScoreKind,
     VariationMove,
+    VariationNode,
 )
 
 
 class SQLiteStorage:
     def __init__(self, path: Path) -> None:
+        self._discussion_lock = RLock()
         self._connection = sqlite3.connect(path, check_same_thread=False)
         self._connection.execute("PRAGMA journal_mode = WAL")
         self._connection.execute("PRAGMA busy_timeout = 5000")
@@ -178,9 +181,13 @@ class SQLiteStorage:
         )
 
     def list_discussions(self, origin: str, origin_id: str) -> list[Discussion]:
+        with self._discussion_lock:
+            return self._list_discussions(origin, origin_id)
+
+    def _list_discussions(self, origin: str, origin_id: str) -> list[Discussion]:
         rows = self._connection.execute(
             """
-            SELECT id, base_ply, base_fen
+            SELECT id, base_ply, base_fen, active_node_id, revision
             FROM discussions
             WHERE game_origin = ? AND game_origin_id = ?
             ORDER BY base_ply
@@ -188,7 +195,7 @@ class SQLiteStorage:
             (origin, origin_id),
         ).fetchall()
         discussions: list[Discussion] = []
-        for discussion_id, base_ply, base_fen in rows:
+        for discussion_id, base_ply, base_fen, active_node_id, revision in rows:
             message_rows = self._connection.execute(
                 """
                 SELECT author, body FROM discussion_messages
@@ -198,12 +205,30 @@ class SQLiteStorage:
             ).fetchall()
             move_rows = self._connection.execute(
                 """
-                SELECT author, move_uci, move_san, resulting_fen
+                SELECT id, parent_id, author, move_uci, move_san, resulting_fen
                 FROM variation_nodes
                 WHERE discussion_id = ? ORDER BY id
                 """,
                 (discussion_id,),
             ).fetchall()
+            nodes = [
+                VariationNode(
+                    id=cast(int, node_id),
+                    parent_id=cast(int | None, parent_id),
+                    author=cast(Literal["player", "trainer", "evaluator"], author),
+                    uci=cast(str, uci), san=cast(str, san),
+                    resulting_fen=cast(str, fen),
+                )
+                for node_id, parent_id, author, uci, san, fen in move_rows
+            ]
+            by_id = {node.id: node for node in nodes}
+            active_moves: list[VariationMove] = []
+            cursor = active_node_id
+            while cursor is not None:
+                current = by_id[cursor]
+                active_moves.append(current)
+                cursor = current.parent_id
+            active_moves.reverse()
             discussions.append(
                 Discussion(
                     base_ply=cast(int, base_ply),
@@ -215,17 +240,10 @@ class SQLiteStorage:
                         )
                         for author, body in message_rows
                     ],
-                    moves=[
-                        VariationMove(
-                            author=cast(
-                                Literal["player", "trainer", "evaluator"], author
-                            ),
-                            uci=cast(str, uci),
-                            san=cast(str, san),
-                            resulting_fen=cast(str, resulting_fen),
-                        )
-                        for author, uci, san, resulting_fen in move_rows
-                    ],
+                    moves=active_moves,
+                    nodes=nodes,
+                    active_node_id=cast(int | None, active_node_id),
+                    revision=cast(int, revision),
                 )
             )
         return discussions
@@ -233,7 +251,7 @@ class SQLiteStorage:
     def create_discussion(
         self, origin: str, origin_id: str, discussion: Discussion
     ) -> None:
-        with self._connection:
+        with self._discussion_lock, self._connection:
             inserted = self._connection.execute(
                 """
                 INSERT INTO discussions (
@@ -286,19 +304,12 @@ class SQLiteStorage:
         origin_id: str,
         base_ply: int,
         move: VariationMove,
+        revision: int,
+        parent_id: int | None,
     ) -> None:
-        with self._connection:
-            row = self._connection.execute(
-                """
-                SELECT id, active_node_id
-                FROM discussions
-                WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?
-                """,
-                (origin, origin_id, base_ply),
-            ).fetchone()
-            if row is None:
-                raise ValueError("Discussion not found")
-            discussion_id, parent_id = row
+        with self._discussion_lock, self._connection:
+            discussion_id = self._advance_revision(origin, origin_id, base_ply, revision)
+            self._validate_node(discussion_id, parent_id)
             node = self._connection.execute(
                 """
                 INSERT INTO variation_nodes (
@@ -318,6 +329,41 @@ class SQLiteStorage:
             self._connection.execute(
                 "UPDATE discussions SET active_node_id = ? WHERE id = ?",
                 (node.lastrowid, discussion_id),
+            )
+
+    def _advance_revision(
+        self, origin: str, origin_id: str, base_ply: int, revision: int,
+    ) -> int:
+        updated = self._connection.execute(
+            """
+            UPDATE discussions SET revision = revision + 1
+            WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?
+                AND revision = ?
+            RETURNING id
+            """,
+            (origin, origin_id, base_ply, revision),
+        ).fetchone()
+        if updated is None:
+            raise DiscussionConflict
+        return cast(int, updated[0])
+
+    def _validate_node(self, discussion_id: int, node_id: int | None) -> None:
+        if node_id is not None and self._connection.execute(
+            "SELECT id FROM variation_nodes WHERE id = ? AND discussion_id = ?",
+            (node_id, discussion_id),
+        ).fetchone() is None:
+            raise ValueError("Node does not belong to this Discussion")
+
+    def select_discussion_node(
+        self, origin: str, origin_id: str, base_ply: int,
+        revision: int, node_id: int | None,
+    ) -> None:
+        with self._discussion_lock, self._connection:
+            discussion_id = self._advance_revision(origin, origin_id, base_ply, revision)
+            self._validate_node(discussion_id, node_id)
+            self._connection.execute(
+                "UPDATE discussions SET active_node_id = ? WHERE id = ?",
+                (node_id, discussion_id),
             )
 
     def close(self) -> None:
@@ -390,3 +436,14 @@ class SQLiteStorage:
                 "UPDATE trainer_preferences SET consent_accepted = ? WHERE id = 1",
                 (int(accepted),),
             )
+
+    def delete_discussion(
+        self, origin: str, origin_id: str, base_ply: int, revision: int,
+    ) -> None:
+        with self._discussion_lock, self._connection:
+            discussion_id = self._advance_revision(origin, origin_id, base_ply, revision)
+            self._connection.execute(
+                "UPDATE discussions SET active_node_id = NULL WHERE id = ?",
+                (discussion_id,),
+            )
+            self._connection.execute("DELETE FROM discussions WHERE id = ?", (discussion_id,))
