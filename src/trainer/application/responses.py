@@ -72,6 +72,15 @@ class DiscussionResponses:
     def wait(self, attempt_id: int) -> None:
         self._workers[attempt_id].join()
 
+    def running_key(self, attempt_id: int) -> tuple[str, str, int]:
+        key = self._keys[attempt_id]
+        if not self.storage.trainer_consent() or not any(
+            a.id == attempt_id and a.status == "running"
+            for a in self.storage.response_attempts(*key)
+        ):
+            raise ValueError("Response is no longer active")
+        return key
+
     def interrupt(self, attempt: ResponseAttempt, key: tuple[str, str, int]) -> None:
         with self.lock:
             current = next(

@@ -467,6 +467,43 @@ class SQLiteStorage:
                 (node.lastrowid, discussion_id),
             )
 
+    def append_trainer_line(
+        self, origin: str, origin_id: str, base_ply: int, attempt_id: int,
+        revision: int, active_node_id: int | None, moves: list[VariationMove],
+    ) -> None:
+        with self._discussion_lock, self._connection:
+            row = self._connection.execute(
+                """SELECT d.id FROM discussions d JOIN trainer_attempts a ON a.discussion_id = d.id
+                WHERE d.game_origin = ? AND d.game_origin_id = ? AND d.base_ply = ?
+                AND d.revision = ? AND d.active_node_id IS ? AND a.id = ? AND a.status = 'running'""",
+                (origin, origin_id, base_ply, revision, active_node_id, attempt_id),
+            ).fetchone()
+            if row is None:
+                raise DiscussionConflict
+            discussion_id = row[0]
+            parent_id = active_node_id
+            for move in moves:
+                node = self._connection.execute(
+                    """INSERT INTO variation_nodes
+                    (discussion_id, parent_id, author, move_uci, move_san, resulting_fen)
+                    VALUES (?, ?, 'trainer', ?, ?, ?)""",
+                    (discussion_id, parent_id, move.uci, move.san, move.resulting_fen),
+                )
+                parent_id = node.lastrowid
+                revision += 1
+                payload = json.dumps({"id": parent_id, "parentId": active_node_id,
+                                      "author": "trainer", "uci": move.uci, "san": move.san,
+                                      "resultingFen": move.resulting_fen, "revision": revision})
+                self._connection.execute(
+                    """INSERT INTO trainer_events SELECT ?, COALESCE(MAX(sequence), 0) + 1, 'move', ?
+                    FROM trainer_events WHERE attempt_id = ?""", (attempt_id, payload, attempt_id),
+                )
+                active_node_id = parent_id
+            self._connection.execute(
+                "UPDATE discussions SET active_node_id = ?, revision = ? WHERE id = ?",
+                (parent_id, revision, discussion_id),
+            )
+
     def _advance_revision(
         self, origin: str, origin_id: str, base_ply: int, revision: int,
         *, trainer: bool = False,

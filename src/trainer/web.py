@@ -14,6 +14,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
+from trainer.adapters.opencode import OpenCodeRuntime
+from trainer.adapters.trainer_mcp import MCPRuntime, TrainerMCP
 from trainer.application.ports import (
     CandidateEvaluator,
     DiscussionConflict,
@@ -244,6 +246,9 @@ def create_web_app(
     candidate_evaluator: CandidateEvaluator | None = None,
 ) -> FastAPI:
     responses = DiscussionResponses(storage, trainer_runtime)
+    mcp = TrainerMCP(responses)
+    if isinstance(trainer_runtime, MCPRuntime):
+        trainer_runtime.configure_mcp("http://127.0.0.1/trainer/mcp", mcp.token)
     trainer_availability = TrainerRuntimeAvailability.unavailable(
         "Trainer runtime has not started."
     )
@@ -253,6 +258,8 @@ def create_web_app(
         nonlocal trainer_availability
         storage.recover_responses()
         try:
+            if isinstance(trainer_runtime, OpenCodeRuntime):
+                trainer_runtime.configure_mcp(mcp.start(), mcp.token)
             trainer_availability = trainer_runtime.start()
         except Exception as error:
             trainer_availability = TrainerRuntimeAvailability.unavailable(
@@ -262,10 +269,12 @@ def create_web_app(
             yield
         finally:
             responses.shutdown()
+            mcp.stop()
             game_source.close()
             storage.close()
 
     app = FastAPI(lifespan=lifespan)
+    app.post("/trainer/mcp")(mcp.handle)
 
     @app.get("/trainer/consent")
     def trainer_consent() -> dict[str, bool]:
