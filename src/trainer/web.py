@@ -525,7 +525,7 @@ def create_web_app(
     ) -> Response:
         try:
             with responses.lock:
-                DeleteDiscussion(storage)(
+                DeleteDiscussion(storage, responses.runtime)(
                     origin=origin, origin_id=origin_id, base_ply=base_ply,
                     revision=selection.revision, confirmed=selection.confirmed,
                 )

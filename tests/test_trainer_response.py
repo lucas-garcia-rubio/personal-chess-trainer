@@ -37,6 +37,12 @@ class FakeOpenCode:
         self.sessions_created += 1
         return "session-first"
 
+    def session_compatible(self, session_id: str) -> bool:
+        return True
+
+    def delete_session(self, session_id: str) -> None:
+        pass
+
     def respond(self, session_id: str, system: str, context: str) -> str:
         self.requests.append(httpx.Request("POST", f"http://fake/{session_id}", json={
             "system": system, "context": json.loads(context),
@@ -225,11 +231,13 @@ def test_context_tracks_critical_moment_all_branches_and_selected_position(
             "base_ply": "0", "message": "Compare both", "initial_moves": "[]",
         })
         context = json.loads(runtime.requests[-1].content)["context"]
-        assert context["critical_moment"]["ply"] == 1
-        assert context["critical_moment"]["played"] == "d4"
-        assert context["critical_moment"]["best"] == "e4"
-        assert context["critical_moment"]["classification"] == "Blunder"
-        assert [node["san"] for node in context["variations"]] == ["e4", "d4"]
+        initial = json.loads(runtime.requests[0].content)["context"]
+        assert initial["critical_moment"]["ply"] == 1
+        assert initial["critical_moment"]["played"] == "d4"
+        assert initial["critical_moment"]["best"] == "e4"
+        assert initial["critical_moment"]["classification"] == "Blunder"
+        assert [node["san"] for node in initial["variations"]] == ["e4"]
+        assert [node["san"] for node in context["variations"]] == ["d4"]
         assert context["active_position"] == branch.json()["activeFen"]
         assert context["active_node_id"] == branch.json()["activeNodeId"]
         assert context["revision"] > branch.json()["revision"]

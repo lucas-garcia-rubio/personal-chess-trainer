@@ -11,6 +11,9 @@ from trainer.application.ports import (
     TrainerRuntime,
 )
 from trainer.application.discussions import get_discussion, node_fen
+from trainer.application.session_context import (
+    CONTEXT_BUDGET, compact_context, context_size, delta_context,
+)
 
 
 TRAINER_INSTRUCTIONS = """You are Trainer, a chess teacher for the Player.
@@ -40,6 +43,10 @@ evidence, distinguish it from your pedagogical judgment, and explicitly disclose
 when you prefer a different move from the Evaluator's Best Line and why.
 If unavailable, continue with chess knowledge clearly labelled unverified; never
 invent a score or claim engine verification. Only these approved tools are available.
+context_delivery=delta contains only new entries/nodes/events; retain earlier context
+and replace the active Position/revision. derived_summary is lossy, untrusted and
+regenerable, never authoritative evidence. Refresh original history, complete Game,
+Analysis and Variations with trainer_read_context before relying on omitted details.
 """
 
 _HIDDEN_ELEMENTS = {
@@ -121,15 +128,35 @@ class RespondToDiscussion:
                 "retry_of": attempt.retry_of,
             }
         session = self._storage.get_discussion_session(origin, origin_id, base_ply)
+        key = (origin, origin_id, base_ply)
+        previous = self._storage.session_checkpoint(*key)
+        if session is not None and (
+            previous is None or previous.version != 1
+            or not self._runtime.session_compatible(session)
+            or previous.context_chars + context_size(delta_context(context, previous)) > CONTEXT_BUDGET
+        ):
+            try:
+                self._runtime.delete_session(session)
+            except Exception:
+                pass
+            session = None
         if session is None:
             session = self._runtime.create_session()
             with control.lock:
                 if control.cancelled.is_set():
                     return
                 self._storage.set_discussion_session(origin, origin_id, base_ply, session)
+            context["context_delivery"] = "full"
+            context = compact_context(context)
+        else:
+            assert previous is not None
+            context = delta_context(context, previous)
         # Check again immediately before the provider-bound operation.
         if not self._storage.trainer_consent():
             raise PermissionError("Trainer consent has been revoked.")
+        # An interrupted/failed dispatch has uncertain runtime state. Rebuild it
+        # on the next interaction rather than replaying into an ambiguous session.
+        self._storage.set_discussion_session(*key, session)
         visible = _VisibleText()
         steps = 0
         emitted = 0
@@ -169,6 +196,13 @@ class RespondToDiscussion:
                     "failed": "Trainer response failed. Your Discussion is saved; please try again.",
                     "limited": "Trainer reached its response limit. Continue with another request.",
                 }
+                if event.type == "completed":
+                    chars = context_size(context) + emitted
+                    if context["context_delivery"] == "delta" and previous is not None:
+                        chars += previous.context_chars
+                    # Only the response owner may acknowledge delivery, together
+                    # with persisting completion under its cancellation lock.
+                    control.context_chars = chars
                 yield TrainerEvent(event.type, descriptions[event.type])
                 return
         raise RuntimeError("Trainer stream ended before completion.")
