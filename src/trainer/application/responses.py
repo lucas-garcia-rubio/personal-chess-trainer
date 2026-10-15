@@ -72,6 +72,20 @@ class DiscussionResponses:
     def wait(self, attempt_id: int) -> None:
         self._workers[attempt_id].join()
 
+    def limit_evaluations(self, attempt_id: int, key: tuple[str, str, int]) -> None:
+        control = self._controls[attempt_id]
+        with control.lock:
+            control.cancelled.set()
+            self.storage.record_response_event(attempt_id, TrainerEvent(
+                "limited", "Trainer reached the limit of 3 Evaluator consultations. Continue with another request.",
+            ))
+            session = self.storage.get_discussion_session(*key)
+            if session is not None:
+                try:
+                    self.runtime.abort(session)
+                except Exception:
+                    pass
+
     def running_key(self, attempt_id: int) -> tuple[str, str, int]:
         key = self._keys[attempt_id]
         if not self.storage.trainer_consent() or not any(

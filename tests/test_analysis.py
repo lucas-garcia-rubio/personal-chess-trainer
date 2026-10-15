@@ -172,7 +172,10 @@ def test_analysis_previews_the_evaluators_best_line_for_the_selected_game_ply(
             3,
         )
     ]
-    assert preview.json() == {
+    document = preview.json()
+    assert document.pop("previewId")
+    assert document.pop("startingFen") == "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    assert document == {
         "label": "Best Line preview",
         "basePly": 0,
         "score": {"kind": "cp", "value": 35},
@@ -264,7 +267,7 @@ def test_best_line_reports_evaluator_failure_without_a_fallback(
 
     assert preview.status_code == 503
     assert preview.json() == {
-        "detail": "Best Line unavailable: engine process exited"
+        "detail": "Best Line unavailable: Evaluator unavailable; chess judgment is unverified."
     }
 
 

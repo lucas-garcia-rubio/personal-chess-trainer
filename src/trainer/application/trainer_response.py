@@ -30,7 +30,16 @@ identifies a prior failed or interrupted attempt, not a new Player message.
 Use trainer_read_context with attempt_id to refresh authoritative context. To
 demonstrate moves use trainer_play_line with that attempt_id, current revision,
 active_node_id and at most 12 legal UCI plies. On conflict reread and retry;
-never silently reinterpret an outdated line. Only these approved tools are available.
+never silently reinterpret an outdated line. Use trainer_evaluate_position with
+attempt_id and position {kind: "game", ply: N} or {kind: "variation", node_id: ID}
+(null node_id means Base Position). At most 3 consultations, 3 candidates each.
+read_context also lists transient preview_positions; these accept
+{kind: "preview", preview_id: ID, ply: N} from 0 through the listed plies.
+Scores are already from the Player's perspective. Cite only returned structured
+evidence, distinguish it from your pedagogical judgment, and explicitly disclose
+when you prefer a different move from the Evaluator's Best Line and why.
+If unavailable, continue with chess knowledge clearly labelled unverified; never
+invent a score or claim engine verification. Only these approved tools are available.
 """
 
 _HIDDEN_ELEMENTS = {

@@ -97,6 +97,11 @@ class ResponseAttempt:
 
 
 class LocalStorage(Protocol):
+    def adopt_evaluator_line(
+        self, origin: str, origin_id: str, base_ply: int, revision: int | None,
+        parent_id: int | None, base_fen: str, moves: list[VariationMove],
+    ) -> None: ...
+
     def append_trainer_line(
         self, origin: str, origin_id: str, base_ply: int, attempt_id: int,
         revision: int, active_node_id: int | None, moves: list[VariationMove],

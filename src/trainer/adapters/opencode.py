@@ -220,7 +220,7 @@ class OpenCodeRuntime:
                                 "mode": "primary",
                                 "steps": 8,
                                 "permission": {"*": "deny", "trainer_read_context": "allow",
-                                               "trainer_play_line": "allow"},
+                                               "trainer_play_line": "allow", "trainer_evaluate_position": "allow"},
                                 "prompt": TRAINER_INSTRUCTIONS,
                             }
                         },
