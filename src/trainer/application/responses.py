@@ -1,4 +1,5 @@
 from threading import RLock, Thread
+import json
 
 from trainer.application.ports import (
     LocalStorage,
@@ -10,6 +11,7 @@ from trainer.application.ports import (
 from trainer.application.trainer_response import RespondToDiscussion
 from trainer.application.session_context import checkpoint
 from trainer.application.evaluation import EvaluatePosition
+from trainer.application.discussions import get_discussion
 
 
 class DiscussionResponses:
@@ -30,6 +32,17 @@ class DiscussionResponses:
         retry_of: int | None = None,
     ) -> ResponseAttempt:
         with self.lock:
+            if retry_of is not None:
+                original = next((a for a in self.storage.response_attempts(origin, origin_id, base_ply)
+                                 if a.id == retry_of), None)
+                if original is None or original.status not in {"failed", "interrupted", "limited"}:
+                    raise ValueError("No retryable Trainer request")
+                snapshot = str(original.events[0]["text"])
+                if snapshot:
+                    starting_node = json.loads(snapshot)["active_node_id"]
+                    discussion = get_discussion(self.storage, origin, origin_id, base_ply)
+                    self.storage.select_discussion_node(origin, origin_id, base_ply,
+                                                        discussion.revision, starting_node)
             attempt = self.storage.begin_response(origin, origin_id, base_ply, retry_of)
             key = (origin, origin_id, base_ply)
             self._keys[attempt.id] = key

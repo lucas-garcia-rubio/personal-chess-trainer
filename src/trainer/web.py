@@ -34,15 +34,15 @@ from trainer.application.discussions import (
     ContinueDiscussion,
     DeleteDiscussion,
     DiscussionValidationError,
-    StartDiscussion,
     SelectDiscussionNode,
     get_discussion,
 )
 from trainer.application.sync import SyncGames
 from trainer.application.responses import DiscussionResponses
-from trainer.application.practical_line import PRACTICAL_LINE_REQUEST
+from trainer.application.submit_discussion import SubmitDiscussion, RequestPracticalLine
+from trainer.application.discussion_view import discussion_view
 from trainer.application.evaluation import BestLineUnavailable, EvaluatePosition
-from trainer.domain import Analysis, Discussion, DiscussionMessage, win_percent
+from trainer.domain import Analysis, Discussion, win_percent
 
 _templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
@@ -201,13 +201,15 @@ def create_web_app(
     game_source: GameSource,
     sync_games: SyncGames,
     import_game: ImportGame,
-    start_discussion: StartDiscussion,
     trainer_runtime: TrainerRuntime,
     continue_discussion: ContinueDiscussion,
     candidate_evaluator: CandidateEvaluator | None = None,
+    evaluator_unavailable_reason: str | None = None,
 ) -> FastAPI:
     evaluations = EvaluatePosition(storage, candidate_evaluator)
     responses = DiscussionResponses(storage, trainer_runtime, evaluations)
+    submit_discussion = SubmitDiscussion(storage, responses, evaluations)
+    request_practical_line = RequestPracticalLine(storage, responses, evaluations)
     mcp = TrainerMCP(responses, evaluations)
     if isinstance(trainer_runtime, MCPRuntime):
         trainer_runtime.configure_mcp("http://127.0.0.1/trainer/mcp", mcp.token)
@@ -292,6 +294,15 @@ def create_web_app(
         canonical_document = storage.get_canonical_document(origin, origin_id)
         if canonical_document is None:
             raise HTTPException(status_code=404, detail="Game not found")
+        with responses.lock:
+            documents = {}
+            views = []
+            for discussion in storage.list_discussions(origin, origin_id):
+                attempts = storage.response_attempts(origin, origin_id, discussion.base_ply)
+                document = _discussion_document(discussion, attempts)
+                documents[str(discussion.base_ply)] = document
+                views.append((discussion.base_ply, discussion_view(document,
+                    storage.discussion_requests(origin, origin_id, discussion.base_ply), attempts)))
         return _templates.TemplateResponse(
             request,
             "analysis.html",
@@ -302,14 +313,10 @@ def create_web_app(
                 "navigation": _build_analysis_navigation(
                     canonical_document, stored_analysis
                 ),
-                "trainer_data": {
-                    "discussions": {
-                        str(discussion.base_ply): _discussion_document(discussion, storage.response_attempts(origin, origin_id, discussion.base_ply))
-                        for discussion in storage.list_discussions(origin, origin_id)
-                    }
-                },
+                "trainer_data": {"discussions": documents},
+                "discussion_views": views,
                 "best_line_unavailable_reason": (
-                    "Best Line unavailable: no Evaluator is configured."
+                    f"Best Line unavailable: {evaluator_unavailable_reason or 'no Evaluator is configured.'}"
                     if candidate_evaluator is None
                     else None
                 ),
@@ -343,29 +350,20 @@ def create_web_app(
                 isinstance(move, str) for move in initial_moves_document
             ):
                 raise ValueError
-            existing = any(
-                d.base_ply == base_ply
-                for d in storage.list_discussions(origin, origin_id)
-            )
             message = fields.get("message", [""])[0].strip()
             if not message:
                 raise DiscussionValidationError("Message is required")
-            with responses.lock:
-                if any(a.status == "running" for a in storage.response_attempts(origin, origin_id, base_ply)):
-                    raise DiscussionConflict
-                start_discussion(
-                    origin=origin, origin_id=origin_id, base_ply=base_ply,
-                    message=message, initial_moves=initial_moves_document,
-                )
-                if trainer_availability.is_available:
-                    if existing:
-                        storage.append_discussion_message(
-                            origin, origin_id, base_ply,
-                            DiscussionMessage(author="player", body=message),
-                        )
-                    attempt = responses.start(origin, origin_id, base_ply)
+            position_document = fields.get("position", [""])[0]
+            position = PositionArguments.model_validate_json(position_document) if position_document else None
+            revision_document = fields.get("revision", ["null"])[0]
+            revision = json.loads(revision_document)
+            if revision is not None and (not isinstance(revision, int) or isinstance(revision, bool)):
+                raise ValueError("Invalid revision")
+            attempt = submit_discussion(origin, origin_id, base_ply, message=message,
+                initial_moves=initial_moves_document, revision=revision,
+                dispatch=trainer_availability.is_available, **(position.model_dump() if position else {}))
         except DiscussionConflict as error:
-            raise HTTPException(status_code=409, detail="Trainer is responding; board changes are locked.") from error
+            raise HTTPException(status_code=409, detail="Discussion changed or Trainer is responding. Reload before sending again.") from error
         except (ValueError, json.JSONDecodeError, DiscussionValidationError) as error:
             detail = str(error) or "Invalid Discussion"
             raise HTTPException(status_code=422, detail=detail) from error
@@ -399,6 +397,20 @@ def create_web_app(
         except DiscussionValidationError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return _discussion_document(discussion, storage.response_attempts(origin, origin_id, base_ply))
+
+    @app.get("/analyses/{origin}/{origin_id}/discussions/{base_ply}/fragment", response_class=HTMLResponse)
+    def discussion_fragment(request: Request, origin: str, origin_id: str, base_ply: int,
+                            attempt_id: int | None = None, cursor: int | None = None) -> Response:
+        if (attempt_id is None) != (cursor is None) or (cursor is not None and cursor < 0):
+            raise HTTPException(status_code=422, detail="Supply an attempt and non-negative cursor together")
+        with responses.lock:
+            document = read_discussion(origin, origin_id, base_ply)
+            attempts = storage.response_attempts(origin, origin_id, base_ply)
+            if attempt_id is not None:
+                find_attempt(origin, origin_id, base_ply, attempt_id)
+            view = discussion_view(document, storage.discussion_requests(origin, origin_id, base_ply),
+                                   attempts, attempt_id, cursor)
+        return _templates.TemplateResponse(request, "discussion.html", {"base_ply": base_ply, "view": view})
 
     @app.get("/analyses/{origin}/{origin_id}/discussions/{base_ply}/attempts/{attempt_id}/events")
     def response_events(request: Request, origin: str, origin_id: str, base_ply: int, attempt_id: int, after: int = 0) -> Response:
@@ -462,32 +474,8 @@ def create_web_app(
         position = selection.position or PositionArguments(kind="game", ply=selection.ply)
         key = (origin, origin_id, selection.ply)
         try:
-            with responses.lock:
-                if any(a.status == "running" for a in storage.response_attempts(*key)):
-                    raise DiscussionConflict
-                existing = next((d for d in storage.list_discussions(origin, origin_id)
-                                 if d.base_ply == selection.ply), None)
-                if (existing.revision if existing else None) != selection.revision:
-                    raise DiscussionConflict
-                evaluations.resolve(*key, **position.model_dump())
-                if position.kind == "game" and position.ply != selection.ply:
-                    raise ValueError("Game Position must match the Base Position")
-                if selection.initial_moves and (existing or position.kind != "game"):
-                    raise ValueError("Initial moves are only valid before Discussion creation")
-                if position.kind == "preview":
-                    assert position.preview_id is not None and position.ply is not None
-                    # At preview ply zero, its underlying anchor still needs selecting.
-                    evaluations.adopt_position(*key, preview_id=position.preview_id, plies=position.ply)
-                existing = next((d for d in storage.list_discussions(origin, origin_id)
-                                 if d.base_ply == selection.ply), None)
-                start_discussion(origin=origin, origin_id=origin_id, base_ply=selection.ply,
-                                 message=PRACTICAL_LINE_REQUEST, initial_moves=selection.initial_moves)
-                if existing:
-                    if position.kind != "preview":
-                        SelectDiscussionNode(storage)(origin=origin, origin_id=origin_id, base_ply=selection.ply,
-                                                      revision=existing.revision, node_id=position.node_id)
-                    storage.append_discussion_message(*key, DiscussionMessage("player", PRACTICAL_LINE_REQUEST))
-                attempt = responses.start(*key)
+            attempt = request_practical_line.request(*key, revision=selection.revision,
+                initial_moves=selection.initial_moves, **position.model_dump())
         except DiscussionConflict as error:
             raise HTTPException(status_code=409, detail="Discussion changed or Trainer is responding.") from error
         except ValueError as error:
@@ -507,7 +495,7 @@ def create_web_app(
         if candidate_evaluator is None:
             raise HTTPException(
                 status_code=503,
-                detail="Best Line unavailable: no Evaluator is configured.",
+                detail=f"Best Line unavailable: {evaluator_unavailable_reason or 'no Evaluator is configured.'}",
             )
         position = selection.position or PositionArguments(kind="game", ply=selection.ply)
         try:
@@ -541,14 +529,15 @@ def create_web_app(
             parent_id = selection.parentId
             if "parentId" not in selection.model_fields_set:
                 parent_id = get_discussion(storage, origin, origin_id, base_ply).active_node_id
-            discussion = continue_discussion(
-                origin=origin,
-                origin_id=origin_id,
-                base_ply=base_ply,
-                uci=selection.uci,
-                revision=selection.revision,
-                parent_id=parent_id,
-            )
+            with responses.lock:
+                discussion = continue_discussion(
+                    origin=origin,
+                    origin_id=origin_id,
+                    base_ply=base_ply,
+                    uci=selection.uci,
+                    revision=selection.revision,
+                    parent_id=parent_id,
+                )
         except DiscussionConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except DiscussionValidationError as error:
@@ -560,10 +549,11 @@ def create_web_app(
         origin: str, origin_id: str, base_ply: int, selection: _NodeSelectionRequest,
     ) -> dict[str, object]:
         try:
-            discussion = SelectDiscussionNode(storage)(
-                origin=origin, origin_id=origin_id, base_ply=base_ply,
-                revision=selection.revision, node_id=selection.nodeId,
-            )
+            with responses.lock:
+                discussion = SelectDiscussionNode(storage)(
+                    origin=origin, origin_id=origin_id, base_ply=base_ply,
+                    revision=selection.revision, node_id=selection.nodeId,
+                )
         except DiscussionConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except DiscussionValidationError as error:

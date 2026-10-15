@@ -43,6 +43,12 @@ class StockfishEvaluator:
     def __init__(self, settings: EngineSettings) -> None:
         self._settings = settings
 
+    def unavailable_reason(self) -> str | None:
+        executable = str(self._settings.executable) if self._settings.executable else "stockfish"
+        if shutil.which(executable) is None:
+            return "Stockfish executable is missing or not executable. Install Stockfish or set [engine] path."
+        return None
+
     def evaluate_positions(self, positions: Sequence[str]) -> EvaluationRun:
         deadline = time.monotonic() + self._settings.timeout_seconds
         with _UciSession(self._command(), self._settings, deadline) as session:

@@ -37,10 +37,11 @@ class LineArguments(ContextArguments):
 
 class PositionArguments(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    kind: Literal["game", "variation", "preview"]
+    kind: Literal["game", "variation", "preview", "exploration"]
     ply: int | None = None
     node_id: int | None = None
     preview_id: str | None = None
+    moves: list[str] | None = Field(default=None, max_length=12)
 
 
 class EvaluationArguments(ContextArguments):
