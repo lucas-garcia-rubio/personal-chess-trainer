@@ -23,11 +23,21 @@ class MigrationSettings:
 
 
 @dataclass(frozen=True)
+class OpenCodeSettings:
+    """How the local Trainer runtime is resolved and started."""
+
+    executable: Path | None = None
+    startup_timeout_seconds: int = 10
+    http_timeout_seconds: int = 5
+
+
+@dataclass(frozen=True)
 class Settings:
     lichess_username: str
     database_path: Path
     engine: EngineSettings = EngineSettings()
     migration: MigrationSettings = MigrationSettings()
+    opencode: OpenCodeSettings = OpenCodeSettings()
 
 
 class ConfigError(ValueError):
@@ -67,6 +77,7 @@ def load_settings(path: Path) -> Settings:
         database_path=database_path,
         engine=_load_engine_settings(config, path),
         migration=_load_migration_settings(config, path),
+        opencode=_load_opencode_settings(config, path),
     )
 
 
@@ -135,3 +146,46 @@ def _load_migration_settings(
     if not executable.is_absolute():
         executable = config_path.parent / executable
     return MigrationSettings(executable=executable)
+
+
+def _load_opencode_settings(
+    config: dict[str, object], config_path: Path
+) -> OpenCodeSettings:
+    opencode = config.get("opencode")
+    if not isinstance(opencode, dict):
+        return OpenCodeSettings()
+
+    configured_executable = opencode.get("path")
+    if configured_executable is not None:
+        if not isinstance(configured_executable, str) or not configured_executable.strip():
+            raise ConfigError("Set [opencode] path to the OpenCode executable path.")
+        executable = Path(configured_executable.strip()).expanduser()
+        if not executable.is_absolute():
+            executable = config_path.parent / executable
+    else:
+        executable = None
+
+    return OpenCodeSettings(
+        executable=executable,
+        startup_timeout_seconds=_opencode_option(
+            opencode,
+            "startup_timeout_seconds",
+            OpenCodeSettings.startup_timeout_seconds,
+        ),
+        http_timeout_seconds=_opencode_option(
+            opencode,
+            "http_timeout_seconds",
+            OpenCodeSettings.http_timeout_seconds,
+        ),
+    )
+
+
+def _opencode_option(
+    opencode: dict[str, object], key: str, default: int
+) -> int:
+    value = opencode.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ConfigError(f"Set [opencode] {key} to a positive integer.")
+    return value
