@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from trainer.application.ports import (
     CandidateEvaluator,
+    DiscussionConflict,
     GameSource,
     LocalStorage,
     TrainerRuntime,
@@ -25,8 +26,11 @@ from trainer.application.import_game import (
 )
 from trainer.application.discussions import (
     ContinueDiscussion,
+    DeleteDiscussion,
     DiscussionValidationError,
     StartDiscussion,
+    SelectDiscussionNode,
+    get_discussion,
 )
 from trainer.application.sync import SyncGames
 from trainer.domain import Analysis, Discussion, win_percent
@@ -58,6 +62,13 @@ class _AnalysisNavigation(TypedDict):
 def _discussion_document(discussion: Discussion) -> dict[str, object]:
     return {
         "baseFen": discussion.base_fen,
+        "revision": discussion.revision,
+        "activeNodeId": discussion.active_node_id,
+        "nodes": [
+            {"id": node.id, "parentId": node.parent_id, "author": node.author,
+             "uci": node.uci, "san": node.san, "fen": node.resulting_fen}
+            for node in discussion.nodes
+        ],
         "activeFen": (
             discussion.moves[-1].resulting_fen
             if discussion.moves
@@ -85,6 +96,18 @@ class _BestLineRequest(BaseModel):
 
 class _PlayerMoveRequest(BaseModel):
     uci: str
+    revision: int
+    parentId: int | None = None
+
+
+class _NodeSelectionRequest(BaseModel):
+    revision: int
+    nodeId: int | None
+
+
+class _DeleteDiscussionRequest(BaseModel):
+    revision: int
+    confirmed: bool
 
 
 class _PreviewMove(TypedDict):
@@ -367,15 +390,52 @@ def create_web_app(
         selection: _PlayerMoveRequest,
     ) -> dict[str, object]:
         try:
+            parent_id = selection.parentId
+            if "parentId" not in selection.model_fields_set:
+                parent_id = get_discussion(storage, origin, origin_id, base_ply).active_node_id
             discussion = continue_discussion(
                 origin=origin,
                 origin_id=origin_id,
                 base_ply=base_ply,
                 uci=selection.uci,
+                revision=selection.revision,
+                parent_id=parent_id,
             )
+        except DiscussionConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         except DiscussionValidationError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return _discussion_document(discussion)
+
+    @app.post("/analyses/{origin}/{origin_id}/discussions/{base_ply}/selection")
+    def select_existing_discussion_node(
+        origin: str, origin_id: str, base_ply: int, selection: _NodeSelectionRequest,
+    ) -> dict[str, object]:
+        try:
+            discussion = SelectDiscussionNode(storage)(
+                origin=origin, origin_id=origin_id, base_ply=base_ply,
+                revision=selection.revision, node_id=selection.nodeId,
+            )
+        except DiscussionConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except DiscussionValidationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return _discussion_document(discussion)
+
+    @app.delete("/analyses/{origin}/{origin_id}/discussions/{base_ply}")
+    def delete_existing_discussion(
+        origin: str, origin_id: str, base_ply: int, selection: _DeleteDiscussionRequest,
+    ) -> Response:
+        try:
+            DeleteDiscussion(storage)(
+                origin=origin, origin_id=origin_id, base_ply=base_ply,
+                revision=selection.revision, confirmed=selection.confirmed,
+            )
+        except DiscussionConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except DiscussionValidationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return Response(status_code=204)
 
     @app.get("/analyses/{source_id}", response_class=HTMLResponse)
     def legacy_lichess_analysis(request: Request, source_id: str) -> Response:

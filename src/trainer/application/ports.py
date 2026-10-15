@@ -17,6 +17,11 @@ class GameIdentityConflict(RuntimeError):
         super().__init__(f"Game identity conflict for {origin}/{origin_id}")
 
 
+class DiscussionConflict(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("Discussion revision is stale; reload the current Discussion")
+
+
 class GameSource(Protocol):
     def fetch_games(self, since: int | None = None) -> list[str]: ...
 
@@ -79,6 +84,17 @@ class LocalStorage(Protocol):
         origin_id: str,
         base_ply: int,
         move: VariationMove,
+        revision: int,
+        parent_id: int | None,
+    ) -> None: ...
+
+    def select_discussion_node(
+        self, origin: str, origin_id: str, base_ply: int,
+        revision: int, node_id: int | None,
+    ) -> None: ...
+
+    def delete_discussion(
+        self, origin: str, origin_id: str, base_ply: int, revision: int,
     ) -> None: ...
 
     def close(self) -> None: ...
