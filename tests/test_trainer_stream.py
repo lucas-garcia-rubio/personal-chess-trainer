@@ -36,6 +36,45 @@ def events(client: TestClient, url: str) -> list[dict[str, Any]]:
         return [json.loads(line[6:]) for line in response.iter_lines() if line.startswith("data: ")]
 
 
+def test_token_deltas_render_as_one_message_and_travel_in_the_event_stream(
+    migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock,
+) -> None:
+    tokens = ["Na ", "posição ", "inicial, "] + ["desenvolva " for _ in range(147)]
+
+    class TokenOpenCode(StreamingOpenCode):
+        def stream(self, session_id: str, system: str, context: str,
+                   control: ResponseControl | None = None) -> Iterator[TrainerEvent]:
+            for token in tokens:
+                yield TrainerEvent("text", token)
+            yield TrainerEvent("completed")
+
+    with TestClient(create_app(migrated_settings("Lance5500"),
+                              lichess_transport=lichess_mock.games_for("Lance5500"),
+                              trainer_runtime=TokenOpenCode())) as client:
+        client.post("/sync")
+        client.post("/trainer/consent", json={"accepted": True})
+        attempt = client.post(URL, data={"base_ply": "0", "message": "Qual o melhor lance?",
+                                        "stream": "true"}).json()
+        raw = events(client, attempt["eventsUrl"])
+        assert len([event for event in raw if event["type"] == "text"]) == 150
+        fragment = client.get(URL + "/0/fragment").text
+        assert fragment.count("Trainer: ") == 1
+        assert "".join(tokens) in fragment
+
+        # A replayed burst is rendered in one text update, on the SSE connection
+        # itself: clients need no fragment GET for any of these 150 deltas.
+        rendered = events(client, attempt["eventsUrl"] + "?render=true")
+        assert [event["type"] for event in rendered] == ["running", "text", "completed"]
+        assert all("html" in event for event in rendered)
+        assert rendered[-1]["html"].count("Trainer: ") == 1
+        assert "".join(tokens) in rendered[-1]["html"]
+        assert rendered[-1]["sequence"] == raw[-1]["sequence"]
+        # Reconnection in the middle of a text block includes its saved prefix.
+        resumed = events(client, attempt["eventsUrl"] + "?render=true&after=75")
+        assert resumed[0]["sequence"] == 151
+        assert "".join(tokens) in resumed[0]["html"]
+
+
 def test_stream_is_ordered_persisted_and_replayable_after_restart(
     migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock,
 ) -> None:
@@ -123,6 +162,9 @@ def test_interrupt_locks_mutations_but_not_reads_and_retry_retains_request_and_p
         assert [a["status"] for a in final["attempts"]] == ["interrupted", "completed"]
         assert final["attempts"][1]["retry_of"] == attempt["id"]
         assert final["attempts"][1]["request_id"] == final["attempts"][0]["request_id"]
+        history = client.get(URL + "/0/fragment").text
+        assert history.count("Trainer: ") == 2
+        assert "Confirmed partial." in history and "Try Nf3." in history
         assert client.post(URL + "/0/moves", json={"revision": final["revision"], "uci": "e2e4"}).status_code == 200
 
     with TestClient(create_app(settings, lichess_transport=lichess_mock.fail_on_request("offline"))) as client:

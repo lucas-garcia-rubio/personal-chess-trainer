@@ -398,11 +398,8 @@ def create_web_app(
             raise HTTPException(status_code=404, detail=str(error)) from error
         return _discussion_document(discussion, storage.response_attempts(origin, origin_id, base_ply))
 
-    @app.get("/analyses/{origin}/{origin_id}/discussions/{base_ply}/fragment", response_class=HTMLResponse)
-    def discussion_fragment(request: Request, origin: str, origin_id: str, base_ply: int,
-                            attempt_id: int | None = None, cursor: int | None = None) -> Response:
-        if (attempt_id is None) != (cursor is None) or (cursor is not None and cursor < 0):
-            raise HTTPException(status_code=422, detail="Supply an attempt and non-negative cursor together")
+    def render_discussion(origin: str, origin_id: str, base_ply: int,
+                          attempt_id: int | None = None, cursor: int | None = None) -> str:
         with responses.lock:
             document = read_discussion(origin, origin_id, base_ply)
             attempts = storage.response_attempts(origin, origin_id, base_ply)
@@ -410,10 +407,18 @@ def create_web_app(
                 find_attempt(origin, origin_id, base_ply, attempt_id)
             view = discussion_view(document, storage.discussion_requests(origin, origin_id, base_ply),
                                    attempts, attempt_id, cursor)
-        return _templates.TemplateResponse(request, "discussion.html", {"base_ply": base_ply, "view": view})
+        return _templates.get_template("discussion.html").render(base_ply=base_ply, view=view)
+
+    @app.get("/analyses/{origin}/{origin_id}/discussions/{base_ply}/fragment", response_class=HTMLResponse)
+    def discussion_fragment(origin: str, origin_id: str, base_ply: int,
+                            attempt_id: int | None = None, cursor: int | None = None) -> Response:
+        if (attempt_id is None) != (cursor is None) or (cursor is not None and cursor < 0):
+            raise HTTPException(status_code=422, detail="Supply an attempt and non-negative cursor together")
+        return HTMLResponse(render_discussion(origin, origin_id, base_ply, attempt_id, cursor))
 
     @app.get("/analyses/{origin}/{origin_id}/discussions/{base_ply}/attempts/{attempt_id}/events")
-    def response_events(request: Request, origin: str, origin_id: str, base_ply: int, attempt_id: int, after: int = 0) -> Response:
+    def response_events(request: Request, origin: str, origin_id: str, base_ply: int, attempt_id: int,
+                        after: int = 0, render: bool = False) -> Response:
         find_attempt(origin, origin_id, base_ply, attempt_id)
         try:
             cursor = max(after, int(request.headers.get("last-event-id", "0")))
@@ -425,11 +430,20 @@ def create_web_app(
             ticks = 0
             while True:
                 attempt = find_attempt(origin, origin_id, base_ply, attempt_id)
-                for event in attempt.events:
+                pending = [event for event in attempt.events if cast(int, event["sequence"]) > cursor]
+                for index, event in enumerate(pending):
                     sequence = cast(int, event["sequence"])
-                    if sequence > cursor:
-                        yield f"id: {sequence}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-                        cursor = sequence
+                    # Render one update per available text burst, but never
+                    # coalesce across a move/evidence/status boundary. Raw
+                    # subscribers retain the complete persisted event log.
+                    if (render and event["type"] == "text" and index + 1 < len(pending)
+                            and pending[index + 1]["type"] == "text"):
+                        continue
+                    payload = dict(event)
+                    if render:
+                        payload["html"] = render_discussion(origin, origin_id, base_ply, attempt_id, sequence)
+                    yield f"id: {sequence}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    cursor = sequence
                 if attempt.status != "running":
                     return
                 ticks += 1

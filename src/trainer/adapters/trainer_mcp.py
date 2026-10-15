@@ -64,7 +64,8 @@ class TrainerMCP:
         listener.bind(("127.0.0.1", 0))
         listener.listen()
         self._socket = listener
-        server = uvicorn.Server(uvicorn.Config(self.app, log_level="error", lifespan="off"))
+        # Logging is process-wide: this embedded server must preserve the host's setup.
+        server = uvicorn.Server(uvicorn.Config(self.app, log_config=None, lifespan="off"))
         self._server = server
         worker = Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
         self._worker = worker

@@ -59,7 +59,14 @@ def discussion_view(document: dict[str, Any], requests: list[tuple[int, str]],
             entry: dict[str, Any] = {**event, "attemptId": attempt.id}
             if kind in {"move", "evidence", "practical_line"}:
                 entry["value"] = json.loads(str(event["text"]))
-            entries.append(entry)
+            # Runtime text events are deltas, not separate Trainer messages.
+            # Merge adjacent visible text only within the same attempt; moves
+            # and evidence must retain their place between text blocks.
+            if (kind == "text" and entries and entries[-1]["type"] == "text"
+                    and entries[-1].get("attemptId") == attempt.id):
+                entries[-1]["text"] += str(event["text"])
+            else:
+                entries.append(entry)
             if attempt.id == attempt_id:
                 if kind == "move":
                     node = entry["value"]

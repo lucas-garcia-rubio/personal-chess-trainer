@@ -286,16 +286,20 @@
         return discussion?.attempts?.find((attempt) => attempt.status === "running");
       }
 
-      async function refreshDiscussion(basePly, attemptId = null, cursor = null) {
+      async function refreshDiscussion(basePly, attemptId = null, cursor = null, html = null) {
         if (attemptId !== null) responseCursors.set(basePly, { attemptId, cursor });
         const processed = responseCursors.get(basePly);
         const query = processed ? `?attempt_id=${processed.attemptId}&cursor=${processed.cursor}` : "";
         const key = `${basePly}${query}`;
         fragmentQueue = fragmentQueue.catch(() => {}).then(async () => {
           if (gameIndex !== basePly) return;
-          await htmx.ajax("GET", `${trainerForm.action}/${basePly}/fragment${query}`, {
-            target: discussionContent, swap: "innerHTML",
-          });
+          if (html !== null) {
+            htmx.swap(discussionContent, html, { swapStyle: "innerHTML", settleDelay: 0 });
+          } else {
+            await htmx.ajax("GET", `${trainerForm.action}/${basePly}/fragment${query}`, {
+              target: discussionContent, swap: "innerHTML",
+            });
+          }
           if (gameIndex !== basePly) {
             discussionContent.hidden = true;
             renderedFragmentKey = null;
@@ -325,12 +329,12 @@
         if (responseStreams.has(attempt.id)) return;
         const processed = responseCursors.get(basePly);
         const after = processed?.attemptId === attempt.id ? processed.cursor : (attempt.events?.at(-1)?.sequence || 0);
-        const source = new EventSource(`${trainerForm.action}/${basePly}/attempts/${attempt.id}/events?after=${after}`);
+        const source = new EventSource(`${trainerForm.action}/${basePly}/attempts/${attempt.id}/events?after=${after}&render=true`);
         responseStreams.set(attempt.id, source);
         let updates = Promise.resolve();
         source.onmessage = (event) => {
           const visible = JSON.parse(event.data);
-          updates = updates.then(() => refreshDiscussion(basePly, attempt.id, visible.sequence)).catch((error) => {
+          updates = updates.then(() => refreshDiscussion(basePly, attempt.id, visible.sequence, visible.html)).catch((error) => {
             discussionError.textContent = error.message;
             discussionError.hidden = false;
           });
