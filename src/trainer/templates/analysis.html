@@ -222,6 +222,11 @@
               <p role="alert"><strong>Trainer unavailable.</strong> {{ trainer_availability.reason }}</p>
             {% endif %}
             <div data-discussion-content></div>
+            <p>OpenCode may send Game moves, Analysis, Variations and Discussion text,
+              including the Player's rating, to its configured provider. Acceptance is
+              stored locally and can be revoked here to block new sends.</p>
+            <label><input type="checkbox" id="trainer-consent"{% if trainer_consent %} checked{% endif %}>
+              I consent to sending this data through OpenCode.</label>
             <form class="trainer-form" method="post" action="/analyses/{{ origin }}/{{ origin_id }}/discussions">
               <input type="hidden" name="base_ply" value="0">
               <input type="hidden" name="initial_moves" value="[]">
@@ -251,6 +256,16 @@
       const panels = [...document.querySelectorAll('[role="tabpanel"]')];
       const discussionContent = document.querySelector("[data-discussion-content]");
       const trainerForm = document.querySelector(".trainer-form");
+      document.querySelector("#trainer-consent").addEventListener("change", async (event) => {
+        const response = await fetch("/trainer/consent", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accepted: event.target.checked }),
+        });
+        if (!response.ok) {
+          event.target.checked = !event.target.checked;
+          alert("Could not save Trainer consent. Please try again.");
+        }
+      });
       const basePlyInput = document.querySelector('[name="base_ply"]');
       const initialMovesInput = document.querySelector('[name="initial_moves"]');
       const bestLineButton = document.querySelector('[data-action="best-line"]');
@@ -402,7 +417,7 @@
         discussionContent.replaceChildren();
         const discussion = trainerData.discussions[String(gameIndex)];
         discussionModeButton.disabled = !discussion;
-        trainerForm.hidden = Boolean(discussion);
+        trainerForm.hidden = false;
         if (!discussion) {
           const empty = document.createElement("p");
           empty.textContent = "No Discussion for this Position yet.";

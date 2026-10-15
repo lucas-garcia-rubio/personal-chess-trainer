@@ -322,3 +322,71 @@ class SQLiteStorage:
 
     def close(self) -> None:
         self._connection.close()
+
+    def trainer_consent(self) -> bool:
+        row = self._connection.execute(
+            "SELECT consent_accepted FROM trainer_preferences WHERE id = 1"
+        ).fetchone()
+        return row is not None and row[0] == 1
+
+    def get_game_headers(self, origin: str, origin_id: str) -> dict[str, str]:
+        row = self._connection.execute(
+            "SELECT headers_document FROM games WHERE origin = ? AND origin_id = ?",
+            (origin, origin_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Game not found")
+        return cast(dict[str, str], json.loads(row[0]))
+
+    def get_discussion_session(self, origin: str, origin_id: str, base_ply: int) -> str | None:
+        row = self._connection.execute(
+            "SELECT opencode_session_id FROM discussions WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?",
+            (origin, origin_id, base_ply),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Discussion not found")
+        return cast(str | None, row[0])
+
+    def set_discussion_session(self, origin: str, origin_id: str, base_ply: int, session_id: str) -> None:
+        with self._connection:
+            self._connection.execute(
+                "UPDATE discussions SET opencode_session_id = ? WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?",
+                (session_id, origin, origin_id, base_ply),
+            )
+
+    def append_discussion_message(self, origin: str, origin_id: str, base_ply: int, message: DiscussionMessage) -> None:
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO discussion_messages (discussion_id, author, body)
+                SELECT id, ?, ? FROM discussions
+                WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?""",
+                (message.author, message.body, origin, origin_id, base_ply),
+            )
+
+    def discussion_positions(self, origin: str, origin_id: str, base_ply: int) -> dict[str, object]:
+        row = self._connection.execute(
+            """SELECT d.id, d.active_node_id, COALESCE(n.resulting_fen, d.base_fen)
+            FROM discussions d LEFT JOIN variation_nodes n ON n.id = d.active_node_id
+            WHERE d.game_origin = ? AND d.game_origin_id = ? AND d.base_ply = ?""",
+            (origin, origin_id, base_ply),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Discussion not found")
+        nodes = self._connection.execute(
+            "SELECT id, parent_id, author, move_uci, move_san, resulting_fen FROM variation_nodes WHERE discussion_id = ? ORDER BY id",
+            (row[0],),
+        ).fetchall()
+        return {
+            "active_node_id": row[1], "active_position": row[2],
+            "variations": [
+                dict(zip(("id", "parent_id", "author", "uci", "san", "fen"), node))
+                for node in nodes
+            ],
+        }
+
+    def set_trainer_consent(self, accepted: bool) -> None:
+        with self._connection:
+            self._connection.execute(
+                "UPDATE trainer_preferences SET consent_accepted = ? WHERE id = 1",
+                (int(accepted),),
+            )

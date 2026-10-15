@@ -8,11 +8,13 @@ import shutil
 import subprocess
 import tempfile
 import time
+from urllib.parse import quote
 
 import httpx
 
 from trainer.application.ports import TrainerRuntimeAvailability
 from trainer.config import OpenCodeSettings
+from trainer.application.trainer_response import TRAINER_INSTRUCTIONS
 
 
 _LISTENING_PATTERN = re.compile(
@@ -20,11 +22,58 @@ _LISTENING_PATTERN = re.compile(
 )
 
 
+class OpenCodeSessionClient:
+    """The OpenCode v1 HTTP boundary; only visible assistant text leaves it."""
+
+    def __init__(self, client: httpx.Client) -> None:
+        self._client = client
+
+    def create_session(self) -> str:
+        response = self._client.post("/session", json={"title": "Chess Discussion"})
+        response.raise_for_status()
+        document = response.json()
+        session_id = document.get("id") if isinstance(document, dict) else None
+        if not isinstance(session_id, str) or not session_id:
+            raise RuntimeError("OpenCode returned no session ID.")
+        return session_id
+
+    def respond(self, session_id: str, system: str, context: str) -> str:
+        response = self._client.post(
+            f"/session/{quote(session_id, safe='')}/message",
+            json={
+                "agent": "trainer", "system": system,
+                "parts": [{"type": "text", "text": context}],
+            },
+            timeout=120.0,
+        )
+        response.raise_for_status()
+        document = response.json()
+        if not isinstance(document, dict):
+            raise RuntimeError("Invalid OpenCode response.")
+        info = document.get("info")
+        parts = document.get("parts")
+        if (
+            not isinstance(info, dict) or info.get("role") != "assistant"
+            or info.get("sessionID") != session_id or info.get("error")
+            or not isinstance(parts, list)
+        ):
+            raise RuntimeError("OpenCode did not complete an assistant response.")
+        return "".join(
+            part["text"] for part in parts
+            if isinstance(part, dict) and part.get("type") == "text"
+            and isinstance(part.get("text"), str)
+            and not part.get("synthetic") and not part.get("ignored")
+            and part.get("sessionID", session_id) == session_id
+            and part.get("messageID", info.get("id")) == info.get("id")
+        )
+
+
 class OpenCodeRuntime:
     def __init__(self, settings: OpenCodeSettings) -> None:
         self._settings = settings
         self._process: subprocess.Popen[str] | None = None
         self._workspace: tempfile.TemporaryDirectory[str] | None = None
+        self._client: httpx.Client | None = None
         self._availability = TrainerRuntimeAvailability.unavailable(
             "OpenCode has not started."
         )
@@ -59,6 +108,7 @@ class OpenCodeRuntime:
                                 "mode": "primary",
                                 "steps": 8,
                                 "permission": {"*": "deny"},
+                                "prompt": TRAINER_INSTRUCTIONS,
                             }
                         },
                     }
@@ -107,9 +157,27 @@ class OpenCodeRuntime:
             return self._set_unavailable(diagnostic)
 
         self._availability = TrainerRuntimeAvailability.available()
+        self._client = httpx.Client(
+            base_url=f"http://127.0.0.1:{port}", auth=(username, password),
+            timeout=self._settings.http_timeout_seconds,
+        )
         return self._availability
 
+    def create_session(self) -> str:
+        return self._session_client().create_session()
+
+    def respond(self, session_id: str, system: str, context: str) -> str:
+        return self._session_client().respond(session_id, system, context)
+
+    def _session_client(self) -> OpenCodeSessionClient:
+        if self._client is None:
+            raise RuntimeError("OpenCode is unavailable.")
+        return OpenCodeSessionClient(self._client)
+
     def stop(self) -> None:
+        if self._client is not None:
+            self._client.close()
+            self._client = None
         process = self._process
         self._process = None
         if process is not None and process.poll() is None:
