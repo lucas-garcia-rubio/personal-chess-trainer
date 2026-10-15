@@ -7,6 +7,7 @@ from urllib.parse import parse_qs
 
 import chess
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -33,7 +34,8 @@ from trainer.application.discussions import (
     get_discussion,
 )
 from trainer.application.sync import SyncGames
-from trainer.domain import Analysis, Discussion, win_percent
+from trainer.application.trainer_response import RespondToDiscussion
+from trainer.domain import Analysis, Discussion, DiscussionMessage, win_percent
 
 _templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
@@ -108,6 +110,10 @@ class _NodeSelectionRequest(BaseModel):
 class _DeleteDiscussionRequest(BaseModel):
     revision: int
     confirmed: bool
+
+
+class _ConsentRequest(BaseModel):
+    accepted: bool
 
 
 class _PreviewMove(TypedDict):
@@ -255,6 +261,15 @@ def create_web_app(
 
     app = FastAPI(lifespan=lifespan)
 
+    @app.get("/trainer/consent")
+    def trainer_consent() -> dict[str, bool]:
+        return {"accepted": storage.trainer_consent()}
+
+    @app.post("/trainer/consent")
+    def update_trainer_consent(selection: _ConsentRequest) -> dict[str, bool]:
+        storage.set_trainer_consent(selection.accepted)
+        return trainer_consent()
+
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request) -> Response:
         return _templates.TemplateResponse(
@@ -323,6 +338,7 @@ def create_web_app(
                 ),
                 "best_line_url": f"/analyses/{origin}/{origin_id}/best-line",
                 "trainer_availability": trainer_availability,
+                "trainer_consent": storage.trainer_consent(),
             },
         )
 
@@ -334,6 +350,11 @@ def create_web_app(
     async def create_discussion(
         request: Request, origin: str, origin_id: str
     ) -> Response:
+        if trainer_availability.is_available and not storage.trainer_consent():
+            raise HTTPException(
+                status_code=403,
+                detail="Trainer consent is required before sending data to OpenCode.",
+            )
         fields = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
         try:
             base_ply = int(fields.get("base_ply", [""])[0])
@@ -344,6 +365,13 @@ def create_web_app(
                 isinstance(move, str) for move in initial_moves_document
             ):
                 raise ValueError
+            existing = any(
+                d.base_ply == base_ply
+                for d in storage.list_discussions(origin, origin_id)
+            )
+            message = fields.get("message", [""])[0].strip()
+            if not message:
+                raise DiscussionValidationError("Message is required")
             start_discussion(
                 origin=origin,
                 origin_id=origin_id,
@@ -354,6 +382,23 @@ def create_web_app(
         except (ValueError, json.JSONDecodeError, DiscussionValidationError) as error:
             detail = str(error) or "Invalid Discussion"
             raise HTTPException(status_code=422, detail=detail) from error
+        if trainer_availability.is_available:
+            try:
+                if existing:
+                    storage.append_discussion_message(
+                        origin, origin_id, base_ply,
+                        DiscussionMessage(author="player", body=message),
+                    )
+                await run_in_threadpool(
+                    RespondToDiscussion(storage, trainer_runtime), origin, origin_id, base_ply
+                )
+            except PermissionError as error:
+                raise HTTPException(status_code=403, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Trainer response failed. Your Discussion is saved; please try again.",
+                ) from error
         return RedirectResponse(
             f"/analyses/{origin}/{origin_id}?trainer=1&ply={base_ply}",
             status_code=303,

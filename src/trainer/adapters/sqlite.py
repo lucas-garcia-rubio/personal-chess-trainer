@@ -369,6 +369,67 @@ class SQLiteStorage:
     def close(self) -> None:
         self._connection.close()
 
+    def trainer_consent(self) -> bool:
+        row = self._connection.execute(
+            "SELECT consent_accepted FROM trainer_preferences WHERE id = 1"
+        ).fetchone()
+        return row is not None and row[0] == 1
+
+    def get_game_headers(self, origin: str, origin_id: str) -> dict[str, str]:
+        row = self._connection.execute(
+            "SELECT headers_document FROM games WHERE origin = ? AND origin_id = ?",
+            (origin, origin_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Game not found")
+        return cast(dict[str, str], json.loads(row[0]))
+
+    def get_discussion_session(
+        self, origin: str, origin_id: str, base_ply: int
+    ) -> str | None:
+        row = self._connection.execute(
+            """SELECT opencode_session_id FROM discussions
+            WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?""",
+            (origin, origin_id, base_ply),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Discussion not found")
+        return cast(str | None, row[0])
+
+    def set_discussion_session(
+        self, origin: str, origin_id: str, base_ply: int, session_id: str
+    ) -> None:
+        with self._discussion_lock, self._connection:
+            self._connection.execute(
+                """UPDATE discussions SET opencode_session_id = ?
+                WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?""",
+                (session_id, origin, origin_id, base_ply),
+            )
+
+    def append_discussion_message(
+        self, origin: str, origin_id: str, base_ply: int, message: DiscussionMessage
+    ) -> None:
+        with self._discussion_lock, self._connection:
+            row = self._connection.execute(
+                """UPDATE discussions SET revision = revision + 1
+                WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?
+                RETURNING id""",
+                (origin, origin_id, base_ply),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Discussion not found")
+            self._connection.execute(
+                "INSERT INTO discussion_messages (discussion_id, author, body) VALUES (?, ?, ?)",
+                (row[0], message.author, message.body),
+            )
+
+    def set_trainer_consent(self, accepted: bool) -> None:
+        with self._discussion_lock, self._connection:
+            self._connection.execute(
+                "UPDATE trainer_preferences SET consent_accepted = ? WHERE id = 1",
+                (int(accepted),),
+            )
+
     def delete_discussion(
         self, origin: str, origin_id: str, base_ply: int, revision: int,
     ) -> None:

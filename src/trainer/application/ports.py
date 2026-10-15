@@ -5,6 +5,7 @@ from typing import Protocol, runtime_checkable
 from trainer.domain import (
     Analysis,
     Discussion,
+    DiscussionMessage,
     EvaluationRun,
     GameMetadata,
     GameSummary,
@@ -58,8 +59,30 @@ class TrainerRuntime(Protocol):
 
     def stop(self) -> None: ...
 
+    def create_session(self) -> str: ...
+
+    def respond(self, session_id: str, system: str, context: str) -> str: ...
+
 
 class LocalStorage(Protocol):
+    def get_game_headers(self, origin: str, origin_id: str) -> dict[str, str]: ...
+
+    def get_discussion_session(
+        self, origin: str, origin_id: str, base_ply: int
+    ) -> str | None: ...
+
+    def set_discussion_session(
+        self, origin: str, origin_id: str, base_ply: int, session_id: str
+    ) -> None: ...
+
+    def append_discussion_message(
+        self, origin: str, origin_id: str, base_ply: int, message: DiscussionMessage
+    ) -> None: ...
+
+    def trainer_consent(self) -> bool: ...
+
+    def set_trainer_consent(self, accepted: bool) -> None: ...
+
     def save_game(
         self, raw_document: str, metadata: GameMetadata, analysis: Analysis
     ) -> None: ...

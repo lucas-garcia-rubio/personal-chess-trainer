@@ -22,6 +22,12 @@ class FakeTrainerRuntime:
     def stop(self) -> None:
         self.stops += 1
 
+    def create_session(self) -> str:
+        raise AssertionError("Availability checks must not create a model session")
+
+    def respond(self, session_id: str, system: str, context: str) -> str:
+        raise AssertionError("Availability checks must not contact a model")
+
 
 def test_analysis_shows_available_trainer_runtime(
     migrated_settings: Callable[[str], Settings],
