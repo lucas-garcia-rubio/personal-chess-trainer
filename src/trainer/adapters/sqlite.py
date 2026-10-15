@@ -504,6 +504,33 @@ class SQLiteStorage:
                 (parent_id, revision, discussion_id),
             )
 
+    def adopt_evaluator_line(
+        self, origin: str, origin_id: str, base_ply: int, revision: int | None,
+        parent_id: int | None, base_fen: str, moves: list[VariationMove],
+    ) -> None:
+        with self._discussion_lock, self._connection:
+            if revision is None:
+                inserted = self._connection.execute(
+                    """INSERT INTO discussions (game_origin, game_origin_id, base_ply, base_fen)
+                    VALUES (?, ?, ?, ?) ON CONFLICT(game_origin, game_origin_id, base_ply) DO NOTHING""",
+                    (origin, origin_id, base_ply, base_fen),
+                )
+                if inserted.rowcount == 0:
+                    raise DiscussionConflict
+                revision = 1
+            discussion_id = self._advance_revision(origin, origin_id, base_ply, revision)
+            self._validate_node(discussion_id, parent_id)
+            for move in moves:
+                node = self._connection.execute(
+                    """INSERT INTO variation_nodes
+                    (discussion_id, parent_id, author, move_uci, move_san, resulting_fen)
+                    VALUES (?, ?, ?, ?, ?, ?)""",
+                    (discussion_id, parent_id, move.author, move.uci, move.san, move.resulting_fen),
+                )
+                parent_id = node.lastrowid
+            self._connection.execute("UPDATE discussions SET active_node_id = ? WHERE id = ?",
+                                     (parent_id, discussion_id))
+
     def _advance_revision(
         self, origin: str, origin_id: str, base_ply: int, revision: int,
         *, trainer: bool = False,

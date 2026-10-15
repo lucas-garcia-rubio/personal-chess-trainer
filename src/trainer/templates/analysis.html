@@ -66,6 +66,8 @@
       .best-line-preview h2 { margin: 0 0 0.5rem; font-size: 1rem; }
       .best-line-preview p { margin: 0.35rem 0; }
       .best-line-error { color: #f09a7f; }
+      .evaluator-evidence { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid #58786b; border-radius: 0.4rem; }
+      .evaluator-evidence p { margin: 0.35rem 0; }
       .evaluation-panel {
         max-width: 32rem;
         margin: 1.5rem 0 0;
@@ -173,6 +175,7 @@
             <p data-preview-score></p>
             <p data-preview-moves></p>
             <p data-preview-provenance></p>
+            <button type="button" data-action="adopt-preview">Continue from this preview</button>
           </aside>
           <p class="best-line-error" data-best-line-error{% if not best_line_unavailable_reason %} hidden{% endif %} aria-live="polite">{{ best_line_unavailable_reason or "" }}</p>
           <div class="highlight-key" aria-label="Move highlight legend">
@@ -221,7 +224,21 @@
             {% else %}
               <p role="alert"><strong>Trainer unavailable.</strong> {{ trainer_availability.reason }}</p>
             {% endif %}
-            <div data-discussion-content></div>
+            <div data-discussion-content>
+              {% for ply, discussion in trainer_data.discussions.items() %}
+              {% for evidence in discussion.evidence %}
+              <article class="evaluator-evidence" data-base-ply="{{ ply }}" data-attempt-id="{{ evidence.attemptId }}">
+                <strong>Evaluator evidence · Trainer response {{ evidence.attemptId }}</strong>
+                {% if evidence.status == 'verified' %}
+                <p>{{ evidence.provenance.name }} {{ evidence.provenance.version or '' }} · {{ evidence.provenance.parameters }}</p>
+                {% for candidate in evidence.candidates %}
+                <p data-score-value="{{ candidate.score.value }}">Player score: {{ candidate.score.kind }} {{ candidate.score.value }} · {% for move in candidate.moves %}{{ move.san }} {% endfor %}</p>
+                {% endfor %}
+                {% else %}<p>{{ evidence.reason }}</p>{% endif %}
+              </article>
+              {% endfor %}
+              {% endfor %}
+            </div>
             <p>OpenCode may send Game moves, Analysis, Variations and Discussion text,
               including the Player's rating, to its configured provider. Acceptance is
               stored locally and can be revoked here to block new sends.</p>
@@ -319,6 +336,7 @@
 
       trainerForm.addEventListener("submit", async (event) => {
         event.preventDefault();
+        if (bestLinePreview && currentIndex > 0 && !await adoptPreview()) return;
         const basePly = gameIndex;
         const body = new URLSearchParams(new FormData(trainerForm));
         body.set("stream", "true");
@@ -384,6 +402,7 @@
       const discussionModeButton = document.querySelector('[data-navigation-mode="discussion"]');
       const previewPanel = document.querySelector(".best-line-preview");
       const previewError = document.querySelector("[data-best-line-error]");
+      const adoptPreviewButton = document.querySelector('[data-action="adopt-preview"]');
       let currentIndex = 0;
       let gameIndex = 0;
       let navigationMode = "game";
@@ -488,6 +507,11 @@
       }
 
       function exploreMove(orig, dest) {
+        if (bestLinePreview) {
+          const move = chess.moves({ square: orig, verbose: true }).find((item) => item.to === dest);
+          if (move) adoptPreview(orig + dest + (move.promotion || ""));
+          return;
+        }
         if (navigationMode === "discussion") {
           continueDiscussionMove(orig, dest);
           return;
@@ -513,11 +537,12 @@
       function showPosition(index) {
         const discussion = trainerData.discussions[String(gameIndex)];
         const positions = bestLinePreview
-          ? [navigation.positions[bestLinePreview.basePly], ...bestLinePreview.moves.map((move) => ({ fen: move.fen, lastMove: move.uci }))]
+          ? [{ fen: bestLinePreview.startingFen, lastMove: null }, ...bestLinePreview.moves.map((move) => ({ fen: move.fen, lastMove: move.uci }))]
           : navigationMode === "discussion" && discussion
             ? [{ fen: discussion.baseFen, lastMove: null }, ...discussion.moves.map((move) => ({ fen: move.fen, lastMove: move.uci }))]
             : navigation.positions;
         currentIndex = Math.max(0, Math.min(index, positions.length - 1));
+        adoptPreviewButton.disabled = currentIndex === 0 || discussionMutationPending || Boolean(runningAttempt(discussion));
         if (!bestLinePreview && navigationMode === "game") gameIndex = currentIndex;
         const position = positions[currentIndex];
         const highlights = bestLinePreview || navigationMode !== "game" ? undefined : navigation.moments[String(currentIndex)];
@@ -590,8 +615,26 @@
           const entry = document.createElement("p");
           entry.className = "discussion-entry";
           const terminal = attempt.events.at(-1);
-          entry.textContent = `Trainer attempt ${attempt.id}: ${attempt.status}${attempt.retry_of ? ` (retry of ${attempt.retry_of})` : ""}${terminal?.type !== "text" && terminal?.text ? ` — ${terminal.text}` : ""}`;
+          entry.textContent = `Trainer attempt ${attempt.id}: ${attempt.status}${attempt.retry_of ? ` (retry of ${attempt.retry_of})` : ""}${["failed", "interrupted", "limited"].includes(terminal?.type) && terminal?.text ? ` — ${terminal.text}` : ""}`;
           discussionContent.append(entry);
+        }
+        for (const evidence of discussion.evidence || []) {
+          const card = document.createElement("article");
+          card.className = "evaluator-evidence";
+          const heading = document.createElement("strong");
+          heading.textContent = `Evaluator evidence · Trainer response ${evidence.attemptId}`;
+          card.append(heading);
+          const source = document.createElement("p");
+          source.textContent = evidence.status === "verified"
+            ? `${evidence.provenance.name} ${evidence.provenance.version || ""} (${evidence.provenance.sourceKind}) · ${JSON.stringify(evidence.provenance.parameters)}`
+            : evidence.reason;
+          card.append(source);
+          for (const candidate of evidence.candidates) {
+            const line = document.createElement("p");
+            line.textContent = `Player score: ${candidate.score.kind} ${candidate.score.value} · ${candidate.moves.map((move) => move.san).join(" ")}`;
+            card.append(line);
+          }
+          discussionContent.append(card);
         }
         if (discussion.moves.length) {
           const line = document.createElement("p");
@@ -692,14 +735,45 @@
 
       previous.addEventListener("click", () => showPosition(currentIndex - 1));
       next.addEventListener("click", () => showPosition(currentIndex + 1));
+      async function adoptPreview(uci = null) {
+        if (!bestLinePreview || discussionMutationPending || runningAttempt(trainerData.discussions[String(gameIndex)])) return false;
+        const basePly = gameIndex;
+        const body = { previewId: bestLinePreview.previewId, plies: currentIndex, uci };
+        discussionMutationPending = true;
+        ground.set({ movable: movableConfig() });
+        try {
+          const response = await fetch(`${trainerForm.action}/${basePly}/adopt-preview`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Preview could not be adopted.");
+          trainerData.discussions[String(basePly)] = result;
+          showDiscussion();
+          return true;
+        } catch (error) {
+          discussionError.textContent = error.message;
+          discussionError.hidden = false;
+          return false;
+        } finally {
+          discussionMutationPending = false;
+          showPosition(currentIndex);
+        }
+      }
+      adoptPreviewButton.addEventListener("click", () => adoptPreview());
       bestLineButton.addEventListener("click", async () => {
         bestLineButton.disabled = true;
         previewError.hidden = true;
         try {
+          const discussion = trainerData.discussions[String(gameIndex)];
+          const position = bestLinePreview
+            ? { kind: "preview", preview_id: bestLinePreview.previewId, ply: currentIndex }
+            : navigationMode === "discussion" && discussion
+              ? { kind: "variation", node_id: displayedNodeId(discussion) }
+              : { kind: "game", ply: gameIndex };
           const response = await fetch(bestLineButton.dataset.url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ply: gameIndex }),
+            body: JSON.stringify({ ply: gameIndex, position }),
           });
           const result = await response.json();
           if (!response.ok) throw new Error(result.detail || "Best Line unavailable.");
@@ -719,9 +793,9 @@
         } catch (error) {
           previewError.textContent = error.message;
           previewError.hidden = false;
-          return;
+        } finally {
+          bestLineButton.disabled = false;
         }
-        bestLineButton.disabled = false;
       });
       returnToGameButton.addEventListener("click", () => showGamePosition(gameIndex));
       gameModeButton.addEventListener("click", () => showGamePosition(gameIndex));

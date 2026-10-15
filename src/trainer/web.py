@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from trainer.adapters.opencode import OpenCodeRuntime
-from trainer.adapters.trainer_mcp import MCPRuntime, TrainerMCP
+from trainer.adapters.trainer_mcp import MCPRuntime, PositionArguments, TrainerMCP
 from trainer.application.ports import (
     CandidateEvaluator,
     DiscussionConflict,
@@ -40,6 +40,7 @@ from trainer.application.discussions import (
 )
 from trainer.application.sync import SyncGames
 from trainer.application.responses import DiscussionResponses
+from trainer.application.evaluation import BestLineUnavailable, EvaluatePosition
 from trainer.domain import Analysis, Discussion, DiscussionMessage, win_percent
 
 _templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
@@ -69,6 +70,10 @@ class _AnalysisNavigation(TypedDict):
 def _discussion_document(discussion: Discussion, attempts: list[ResponseAttempt] | None = None) -> dict[str, object]:
     return {
         "attempts": [asdict(attempt) for attempt in attempts or []],
+        "evidence": [
+            {"attemptId": attempt.id, **json.loads(cast(str, event["text"]))}
+            for attempt in attempts or [] for event in attempt.events if event["type"] == "evidence"
+        ],
         "baseFen": discussion.base_fen,
         "revision": discussion.revision,
         "activeNodeId": discussion.active_node_id,
@@ -100,6 +105,13 @@ def _discussion_document(discussion: Discussion, attempts: list[ResponseAttempt]
 
 class _BestLineRequest(BaseModel):
     ply: int
+    position: PositionArguments | None = None
+
+
+class _AdoptPreviewRequest(BaseModel):
+    previewId: str
+    plies: int
+    uci: str | None = None
 
 
 class _PlayerMoveRequest(BaseModel):
@@ -120,12 +132,6 @@ class _DeleteDiscussionRequest(BaseModel):
 
 class _ConsentRequest(BaseModel):
     accepted: bool
-
-
-class _PreviewMove(TypedDict):
-    uci: str
-    san: str
-    fen: str
 
 
 def _build_analysis_navigation(
@@ -180,61 +186,6 @@ def _build_analysis_navigation(
     }
 
 
-def _best_line_preview(
-    navigation: _AnalysisNavigation,
-    analysis: Analysis,
-    evaluator: CandidateEvaluator,
-    ply: int,
-) -> dict[str, object]:
-    positions = navigation["positions"]
-    if ply < 0 or ply >= len(positions):
-        raise HTTPException(status_code=422, detail="The selected Game ply is invalid.")
-
-    try:
-        run = evaluator.evaluate_candidates(positions[ply]["fen"], 3)
-    except Exception as error:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Best Line unavailable: {error}",
-        ) from error
-    if not run.evaluations:
-        raise HTTPException(
-            status_code=503,
-            detail="Best Line unavailable: the Evaluator returned no candidates.",
-        )
-
-    best = run.evaluations[0]
-    board = chess.Board(positions[ply]["fen"])
-    moves: list[_PreviewMove] = []
-    try:
-        for uci in best.principal_variation:
-            move = board.parse_uci(uci)
-            san = board.san(move)
-            board.push(move)
-            moves.append({"uci": uci, "san": san, "fen": board.fen()})
-    except ValueError as error:
-        raise HTTPException(
-            status_code=503,
-            detail="Best Line unavailable: the Evaluator returned an illegal line.",
-        ) from error
-
-    score_value = best.score.value
-    if analysis.player_color == "black":
-        score_value = -score_value
-    return {
-        "label": "Best Line preview",
-        "basePly": ply,
-        "score": {"kind": best.score.kind, "value": score_value},
-        "moves": moves,
-        "provenance": {
-            "sourceKind": run.provenance.source_kind,
-            "name": run.provenance.name,
-            "version": run.provenance.version,
-            "parameters": run.provenance.parameters,
-        },
-    }
-
-
 def create_web_app(
     storage: LocalStorage,
     game_source: GameSource,
@@ -246,7 +197,8 @@ def create_web_app(
     candidate_evaluator: CandidateEvaluator | None = None,
 ) -> FastAPI:
     responses = DiscussionResponses(storage, trainer_runtime)
-    mcp = TrainerMCP(responses)
+    evaluations = EvaluatePosition(storage, candidate_evaluator)
+    mcp = TrainerMCP(responses, evaluations)
     if isinstance(trainer_runtime, MCPRuntime):
         trainer_runtime.configure_mcp("http://127.0.0.1/trainer/mcp", mcp.token)
     trainer_availability = TrainerRuntimeAvailability.unavailable(
@@ -506,13 +458,26 @@ def create_web_app(
                 status_code=503,
                 detail="Best Line unavailable: no Evaluator is configured.",
             )
-        navigation = _build_analysis_navigation(canonical_document, stored_analysis)
-        return _best_line_preview(
-            navigation,
-            stored_analysis,
-            candidate_evaluator,
-            selection.ply,
-        )
+        position = selection.position or PositionArguments(kind="game", ply=selection.ply)
+        try:
+            with responses.lock:
+                return evaluations.best_line(origin, origin_id, selection.ply, **position.model_dump())
+        except BestLineUnavailable as error:
+            raise HTTPException(status_code=503, detail=f"Best Line unavailable: {error}") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.post("/analyses/{origin}/{origin_id}/discussions/{base_ply}/adopt-preview")
+    def adopt_preview(origin: str, origin_id: str, base_ply: int, selection: _AdoptPreviewRequest) -> dict[str, object]:
+        try:
+            with responses.lock:
+                discussion = evaluations.adopt(origin, origin_id, base_ply,
+                                               preview_id=selection.previewId, plies=selection.plies, uci=selection.uci)
+        except DiscussionConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return _discussion_document(discussion, storage.response_attempts(origin, origin_id, base_ply))
 
     @app.post("/analyses/{origin}/{origin_id}/discussions/{base_ply}/moves")
     def continue_existing_discussion(
@@ -559,10 +524,12 @@ def create_web_app(
         origin: str, origin_id: str, base_ply: int, selection: _DeleteDiscussionRequest,
     ) -> Response:
         try:
-            DeleteDiscussion(storage)(
-                origin=origin, origin_id=origin_id, base_ply=base_ply,
-                revision=selection.revision, confirmed=selection.confirmed,
-            )
+            with responses.lock:
+                DeleteDiscussion(storage)(
+                    origin=origin, origin_id=origin_id, base_ply=base_ply,
+                    revision=selection.revision, confirmed=selection.confirmed,
+                )
+                evaluations.discard_previews((origin, origin_id, base_ply))
         except DiscussionConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except DiscussionValidationError as error:

@@ -62,7 +62,7 @@ def test_context_authentication_and_run_scoping(
                                      "params": {"protocolVersion": "2025-03-26"}}).json()["result"]
             assert initialized["protocolVersion"] == "2025-03-26"
             tools = client.post("/trainer/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).json()["result"]["tools"]
-            assert [tool["name"] for tool in tools] == ["read_context", "play_line"]
+            assert [tool["name"] for tool in tools] == ["read_context", "play_line", "evaluate_position"]
             assert tools[1]["inputSchema"]["properties"]["moves"]["maxItems"] == 12
             result = call(client, runtime.token, "read_context", {"attempt_id": attempt["id"]})
             context = result["structuredContent"]
@@ -168,6 +168,7 @@ def test_production_runtime_receives_only_approved_tools_and_ephemeral_mcp_confi
             assert config["permission"] == {"*": "deny"}
             assert config["agent"]["trainer"]["permission"] == {
                 "*": "deny", "trainer_read_context": "allow", "trainer_play_line": "allow",
+                "trainer_evaluate_position": "allow",
             }
             assert "model" not in config["agent"]["trainer"]
             assert list(config["mcp"]) == ["trainer"]

@@ -4,7 +4,7 @@ import secrets
 import socket
 from threading import Thread
 import time
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 import uvicorn
 
 from trainer.application.discussions import PlayTrainerLine
+from trainer.application.evaluation import EvaluatePosition, EvaluationLimit
 from trainer.application.ports import DiscussionConflict
 from trainer.application.responses import DiscussionResponses
 from trainer.application.trainer_response import ReadDiscussionContext
@@ -33,9 +34,22 @@ class LineArguments(ContextArguments):
     moves: list[str] = Field(min_length=1, max_length=12)
 
 
+class PositionArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    kind: Literal["game", "variation", "preview"]
+    ply: int | None = None
+    node_id: int | None = None
+    preview_id: str | None = None
+
+
+class EvaluationArguments(ContextArguments):
+    position: PositionArguments
+
+
 class TrainerMCP:
-    def __init__(self, responses: DiscussionResponses) -> None:
+    def __init__(self, responses: DiscussionResponses, evaluate: EvaluatePosition) -> None:
         self.responses = responses
+        self.evaluate = evaluate
         self.token = secrets.token_urlsafe(32)
         self.app = FastAPI()
         self.app.post("/")(self.handle)
@@ -89,6 +103,8 @@ class TrainerMCP:
                      "inputSchema": ContextArguments.model_json_schema()},
                     {"name": "play_line", "description": "Demonstrate 1-12 legal UCI plies atomically from the current active node and revision.",
                      "inputSchema": LineArguments.model_json_schema()},
+                    {"name": "evaluate_position", "description": "Consult Evaluator evidence for a controlled Game, Variation or preview Position. At most 3 consultations per response and 3 candidates per consultation. Scores are Player-relative; unavailable means unverified judgment only.",
+                     "inputSchema": EvaluationArguments.model_json_schema()},
                 ]}
             elif method == "tools/call":
                 try:
@@ -99,14 +115,27 @@ class TrainerMCP:
                             parsed = ContextArguments.model_validate(args)
                         elif params["name"] == "play_line":
                             parsed = LineArguments.model_validate(args)
+                        elif params["name"] == "evaluate_position":
+                            parsed = EvaluationArguments.model_validate(args)
                         else:
                             raise ValueError("Unknown tool")
                         key = self.responses.running_key(parsed.attempt_id)
                         if isinstance(parsed, LineArguments):
                             PlayTrainerLine(self.responses.storage)(*key, **parsed.model_dump())
-                        context = ReadDiscussionContext(self.responses.storage)(*key)
+                        if isinstance(parsed, EvaluationArguments):
+                            try:
+                                context = self.evaluate.consult(*key, attempt_id=parsed.attempt_id,
+                                                                **parsed.position.model_dump())
+                            except EvaluationLimit:
+                                self.responses.limit_evaluations(parsed.attempt_id, key)
+                                raise
+                        else:
+                            context = ReadDiscussionContext(self.responses.storage)(*key)
+                            context["preview_positions"] = self.evaluate.preview_positions(key)
                     result = {"content": [{"type": "text", "text": json.dumps(context)}],
                               "structuredContent": context, "isError": False}
+                except EvaluationLimit:
+                    result = {"content": [{"type": "text", "text": "Limit reached: 3 Evaluator consultations. This response has ended; continue in a new request."}], "isError": True}
                 except DiscussionConflict:
                     result = {"content": [{"type": "text", "text": "Revision or active node conflict. Call read_context and retry; no moves were saved."}], "isError": True}
                 except (ValueError, KeyError):
