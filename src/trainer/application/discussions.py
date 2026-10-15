@@ -3,7 +3,7 @@ from typing import cast
 
 import chess
 
-from trainer.application.ports import LocalStorage
+from trainer.application.ports import DiscussionConflict, LocalStorage
 from trainer.domain import Discussion, DiscussionMessage, VariationMove
 
 
@@ -76,24 +76,14 @@ class ContinueDiscussion:
         self._storage = storage
 
     def __call__(
-        self, *, origin: str, origin_id: str, base_ply: int, uci: str
+        self, *, origin: str, origin_id: str, base_ply: int, uci: str,
+        revision: int, parent_id: int | None,
     ) -> Discussion:
-        discussion = next(
-            (
-                item
-                for item in self._storage.list_discussions(origin, origin_id)
-                if item.base_ply == base_ply
-            ),
-            None,
-        )
-        if discussion is None:
-            raise DiscussionValidationError("Discussion not found")
+        discussion = get_discussion(self._storage, origin, origin_id, base_ply)
+        if discussion.revision != revision:
+            raise DiscussionConflict
 
-        active_fen = (
-            discussion.moves[-1].resulting_fen
-            if discussion.moves
-            else discussion.base_fen
-        )
+        active_fen = node_fen(discussion, parent_id)
         board = chess.Board(active_fen)
         try:
             move = chess.Move.from_uci(uci)
@@ -113,11 +103,58 @@ class ContinueDiscussion:
             resulting_fen=board.fen(),
         )
         self._storage.append_discussion_move(
-            origin, origin_id, base_ply, persisted_move
+            origin, origin_id, base_ply, persisted_move, revision, parent_id
         )
-        return Discussion(
-            base_ply=discussion.base_ply,
-            base_fen=discussion.base_fen,
-            messages=discussion.messages,
-            moves=[*discussion.moves, persisted_move],
+        return get_discussion(self._storage, origin, origin_id, base_ply)
+
+
+def get_discussion(
+    storage: LocalStorage, origin: str, origin_id: str, base_ply: int,
+) -> Discussion:
+    discussion = next(
+        (item for item in storage.list_discussions(origin, origin_id)
+         if item.base_ply == base_ply), None,
+    )
+    if discussion is None:
+        raise DiscussionValidationError("Discussion not found")
+    return discussion
+
+
+def node_fen(discussion: Discussion, node_id: int | None) -> str:
+    if node_id is None:
+        return discussion.base_fen
+    for node in discussion.nodes:
+        if node.id == node_id:
+            return node.resulting_fen
+    raise DiscussionValidationError("Node does not belong to this Discussion")
+
+
+class SelectDiscussionNode:
+    def __init__(self, storage: LocalStorage) -> None:
+        self._storage = storage
+
+    def __call__(
+        self, *, origin: str, origin_id: str, base_ply: int,
+        revision: int, node_id: int | None,
+    ) -> Discussion:
+        discussion = get_discussion(self._storage, origin, origin_id, base_ply)
+        if discussion.revision != revision:
+            raise DiscussionConflict
+        node_fen(discussion, node_id)
+        self._storage.select_discussion_node(
+            origin, origin_id, base_ply, revision, node_id,
         )
+        return get_discussion(self._storage, origin, origin_id, base_ply)
+
+
+class DeleteDiscussion:
+    def __init__(self, storage: LocalStorage) -> None:
+        self._storage = storage
+
+    def __call__(
+        self, *, origin: str, origin_id: str, base_ply: int,
+        revision: int, confirmed: bool,
+    ) -> None:
+        if not confirmed:
+            raise DiscussionValidationError("Confirm deletion of the Discussion")
+        self._storage.delete_discussion(origin, origin_id, base_ply, revision)
