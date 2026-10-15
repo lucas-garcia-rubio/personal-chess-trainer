@@ -97,6 +97,11 @@ class ResponseAttempt:
 
 
 class LocalStorage(Protocol):
+    def append_trainer_line(
+        self, origin: str, origin_id: str, base_ply: int, attempt_id: int,
+        revision: int, active_node_id: int | None, moves: list[VariationMove],
+    ) -> None: ...
+
     def response_request(self, request_id: int) -> str: ...
 
     def begin_response(

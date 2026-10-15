@@ -179,9 +179,14 @@ class OpenCodeRuntime:
         self._process: subprocess.Popen[str] | None = None
         self._workspace: tempfile.TemporaryDirectory[str] | None = None
         self._client: httpx.Client | None = None
+        self._mcp: dict[str, object] = {}
         self._availability = TrainerRuntimeAvailability.unavailable(
             "OpenCode has not started."
         )
+
+    def configure_mcp(self, url: str, token: str) -> None:
+        self._mcp = {"trainer": {"type": "remote", "url": url, "enabled": True,
+                                 "oauth": False, "headers": {"Authorization": f"Bearer {token}"}}}
 
     def start(self) -> TrainerRuntimeAvailability:
         if self._process is not None and self._process.poll() is None:
@@ -207,12 +212,15 @@ class OpenCodeRuntime:
                 "OPENCODE_CONFIG_CONTENT": json.dumps(
                     {
                         "default_agent": "trainer",
+                        "permission": {"*": "deny"},
+                        "mcp": self._mcp,
                         "agent": {
                             "trainer": {
                                 "description": "Discuss chess Positions with the Player.",
                                 "mode": "primary",
                                 "steps": 8,
-                                "permission": {"*": "deny"},
+                                "permission": {"*": "deny", "trainer_read_context": "allow",
+                                               "trainer_play_line": "allow"},
                                 "prompt": TRAINER_INSTRUCTIONS,
                             }
                         },

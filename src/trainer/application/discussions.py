@@ -147,6 +147,35 @@ class SelectDiscussionNode:
         return get_discussion(self._storage, origin, origin_id, base_ply)
 
 
+class PlayTrainerLine:
+    def __init__(self, storage: LocalStorage) -> None:
+        self._storage = storage
+
+    def __call__(self, origin: str, origin_id: str, base_ply: int, *,
+                 attempt_id: int, revision: int, active_node_id: int | None,
+                 moves: list[str]) -> Discussion:
+        discussion = get_discussion(self._storage, origin, origin_id, base_ply)
+        if discussion.revision != revision or discussion.active_node_id != active_node_id:
+            raise DiscussionConflict
+        if not 1 <= len(moves) <= 12:
+            raise DiscussionValidationError("A line must contain 1 to 12 plies")
+        board = chess.Board(node_fen(discussion, active_node_id))
+        validated: list[VariationMove] = []
+        for uci in moves:
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError as error:
+                raise DiscussionValidationError("Invalid move; no moves were saved") from error
+            if move not in board.legal_moves:
+                raise DiscussionValidationError("Illegal move; no moves were saved")
+            san = board.san(move)
+            board.push(move)
+            validated.append(VariationMove(author="trainer", uci=uci, san=san, resulting_fen=board.fen()))
+        self._storage.append_trainer_line(origin, origin_id, base_ply, attempt_id,
+                                          revision, active_node_id, validated)
+        return get_discussion(self._storage, origin, origin_id, base_ply)
+
+
 class DeleteDiscussion:
     def __init__(self, storage: LocalStorage) -> None:
         self._storage = storage

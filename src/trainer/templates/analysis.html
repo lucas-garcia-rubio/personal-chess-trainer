@@ -287,7 +287,22 @@
         source.onmessage = (event) => {
           const visible = JSON.parse(event.data);
           // Serialize refreshes so an older HTTP result cannot overwrite a newer one.
-          updates = updates.then(() => refreshDiscussion(basePly)).catch((error) => {
+          updates = updates.then(() => {
+            if (visible.type !== "move") return refreshDiscussion(basePly);
+            const node = JSON.parse(visible.text);
+            const discussion = trainerData.discussions[String(basePly)];
+            if (!discussion.nodes.some((existing) => existing.id === node.id)) {
+              discussion.nodes.push({ ...node, fen: node.resultingFen });
+            }
+            discussion.activeNodeId = node.id;
+            discussion.activeFen = node.resultingFen;
+            discussion.revision = Math.max(discussion.revision, node.revision);
+            discussion.moves = discussionPath(discussion, node.id);
+            if (gameIndex === basePly) {
+              navigationMode = "discussion";
+              showPosition(discussion.moves.length);
+            }
+          }).catch((error) => {
             discussionError.textContent = error.message;
             discussionError.hidden = false;
           });
