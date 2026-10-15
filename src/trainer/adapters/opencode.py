@@ -13,8 +13,8 @@ from urllib.parse import quote
 import httpx
 
 from trainer.application.ports import TrainerRuntimeAvailability
-from trainer.config import OpenCodeSettings
 from trainer.application.trainer_response import TRAINER_INSTRUCTIONS
+from trainer.config import OpenCodeSettings
 
 
 _LISTENING_PATTERN = re.compile(
@@ -41,7 +41,8 @@ class OpenCodeSessionClient:
         response = self._client.post(
             f"/session/{quote(session_id, safe='')}/message",
             json={
-                "agent": "trainer", "system": system,
+                "agent": "trainer",
+                "system": system,
                 "parts": [{"type": "text", "text": context}],
             },
             timeout=120.0,
@@ -53,16 +54,21 @@ class OpenCodeSessionClient:
         info = document.get("info")
         parts = document.get("parts")
         if (
-            not isinstance(info, dict) or info.get("role") != "assistant"
-            or info.get("sessionID") != session_id or info.get("error")
+            not isinstance(info, dict)
+            or info.get("role") != "assistant"
+            or info.get("sessionID") != session_id
+            or info.get("error")
             or not isinstance(parts, list)
         ):
             raise RuntimeError("OpenCode did not complete an assistant response.")
         return "".join(
-            part["text"] for part in parts
-            if isinstance(part, dict) and part.get("type") == "text"
+            part["text"]
+            for part in parts
+            if isinstance(part, dict)
+            and part.get("type") == "text"
             and isinstance(part.get("text"), str)
-            and not part.get("synthetic") and not part.get("ignored")
+            and not part.get("synthetic")
+            and not part.get("ignored")
             and part.get("sessionID", session_id) == session_id
             and part.get("messageID", info.get("id")) == info.get("id")
         )
@@ -158,7 +164,8 @@ class OpenCodeRuntime:
 
         self._availability = TrainerRuntimeAvailability.available()
         self._client = httpx.Client(
-            base_url=f"http://127.0.0.1:{port}", auth=(username, password),
+            base_url=f"http://127.0.0.1:{port}",
+            auth=(username, password),
             timeout=self._settings.http_timeout_seconds,
         )
         return self._availability

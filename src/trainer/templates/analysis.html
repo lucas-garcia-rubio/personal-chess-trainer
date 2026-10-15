@@ -225,12 +225,12 @@
             <p>OpenCode may send Game moves, Analysis, Variations and Discussion text,
               including the Player's rating, to its configured provider. Acceptance is
               stored locally and can be revoked here to block new sends.</p>
-            <label><input type="checkbox" id="trainer-consent"{% if trainer_consent %} checked{% endif %}>
+            <label><input type="checkbox" id="trainer-consent" form="trainer-message-form" required{% if trainer_consent %} checked{% endif %}>
               I consent to sending this data through OpenCode.</label>
             <div data-discussion-branches aria-label="Discussion Variations"></div>
             <button type="button" data-action="delete-discussion" hidden>Delete Discussion</button>
             <p data-discussion-error role="status" hidden></p>
-            <form class="trainer-form" method="post" action="/analyses/{{ origin }}/{{ origin_id }}/discussions">
+            <form id="trainer-message-form" class="trainer-form" method="post" action="/analyses/{{ origin }}/{{ origin_id }}/discussions">
               <input type="hidden" name="base_ply" value="0">
               <input type="hidden" name="initial_moves" value="[]">
               <label for="trainer-message">Discuss this Position</label>
@@ -263,13 +263,23 @@
       const discussionError = document.querySelector("[data-discussion-error]");
       const trainerForm = document.querySelector(".trainer-form");
       document.querySelector("#trainer-consent").addEventListener("change", async (event) => {
-        const response = await fetch("/trainer/consent", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ accepted: event.target.checked }),
-        });
-        if (!response.ok) {
+        const checkbox = event.target;
+        const submit = trainerForm.querySelector('[type="submit"]');
+        const wasDisabled = submit.disabled;
+        submit.disabled = true;
+        checkbox.disabled = true;
+        try {
+          const response = await fetch("/trainer/consent", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ accepted: checkbox.checked }),
+          });
+          if (!response.ok) throw new Error("Consent was not saved.");
+        } catch {
           event.target.checked = !event.target.checked;
           alert("Could not save Trainer consent. Please try again.");
+        } finally {
+          checkbox.disabled = false;
+          submit.disabled = wasDisabled;
         }
       });
       const basePlyInput = document.querySelector('[name="base_ply"]');

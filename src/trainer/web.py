@@ -7,6 +7,7 @@ from urllib.parse import parse_qs
 
 import chess
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -350,7 +351,10 @@ def create_web_app(
         request: Request, origin: str, origin_id: str
     ) -> Response:
         if trainer_availability.is_available and not storage.trainer_consent():
-            raise HTTPException(status_code=403, detail="Trainer consent is required before sending data to OpenCode.")
+            raise HTTPException(
+                status_code=403,
+                detail="Trainer consent is required before sending data to OpenCode.",
+            )
         fields = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
         try:
             base_ply = int(fields.get("base_ply", [""])[0])
@@ -361,7 +365,10 @@ def create_web_app(
                 isinstance(move, str) for move in initial_moves_document
             ):
                 raise ValueError
-            existing = any(d.base_ply == base_ply for d in storage.list_discussions(origin, origin_id))
+            existing = any(
+                d.base_ply == base_ply
+                for d in storage.list_discussions(origin, origin_id)
+            )
             message = fields.get("message", [""])[0].strip()
             if not message:
                 raise DiscussionValidationError("Message is required")
@@ -378,12 +385,20 @@ def create_web_app(
         if trainer_availability.is_available:
             try:
                 if existing:
-                    storage.append_discussion_message(origin, origin_id, base_ply, DiscussionMessage(author="player", body=message))
-                RespondToDiscussion(storage, trainer_runtime)(origin, origin_id, base_ply)
+                    storage.append_discussion_message(
+                        origin, origin_id, base_ply,
+                        DiscussionMessage(author="player", body=message),
+                    )
+                await run_in_threadpool(
+                    RespondToDiscussion(storage, trainer_runtime), origin, origin_id, base_ply
+                )
             except PermissionError as error:
                 raise HTTPException(status_code=403, detail=str(error)) from error
             except Exception as error:
-                raise HTTPException(status_code=503, detail="Trainer response failed. Your Discussion is saved; please try again.") from error
+                raise HTTPException(
+                    status_code=503,
+                    detail="Trainer response failed. Your Discussion is saved; please try again.",
+                ) from error
         return RedirectResponse(
             f"/analyses/{origin}/{origin_id}?trainer=1&ply={base_ply}",
             status_code=303,

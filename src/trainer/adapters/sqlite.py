@@ -384,54 +384,47 @@ class SQLiteStorage:
             raise ValueError("Game not found")
         return cast(dict[str, str], json.loads(row[0]))
 
-    def get_discussion_session(self, origin: str, origin_id: str, base_ply: int) -> str | None:
+    def get_discussion_session(
+        self, origin: str, origin_id: str, base_ply: int
+    ) -> str | None:
         row = self._connection.execute(
-            "SELECT opencode_session_id FROM discussions WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?",
+            """SELECT opencode_session_id FROM discussions
+            WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?""",
             (origin, origin_id, base_ply),
         ).fetchone()
         if row is None:
             raise ValueError("Discussion not found")
         return cast(str | None, row[0])
 
-    def set_discussion_session(self, origin: str, origin_id: str, base_ply: int, session_id: str) -> None:
-        with self._connection:
+    def set_discussion_session(
+        self, origin: str, origin_id: str, base_ply: int, session_id: str
+    ) -> None:
+        with self._discussion_lock, self._connection:
             self._connection.execute(
-                "UPDATE discussions SET opencode_session_id = ? WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?",
+                """UPDATE discussions SET opencode_session_id = ?
+                WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?""",
                 (session_id, origin, origin_id, base_ply),
             )
 
-    def append_discussion_message(self, origin: str, origin_id: str, base_ply: int, message: DiscussionMessage) -> None:
-        with self._connection:
+    def append_discussion_message(
+        self, origin: str, origin_id: str, base_ply: int, message: DiscussionMessage
+    ) -> None:
+        with self._discussion_lock, self._connection:
+            row = self._connection.execute(
+                """UPDATE discussions SET revision = revision + 1
+                WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?
+                RETURNING id""",
+                (origin, origin_id, base_ply),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Discussion not found")
             self._connection.execute(
-                """INSERT INTO discussion_messages (discussion_id, author, body)
-                SELECT id, ?, ? FROM discussions
-                WHERE game_origin = ? AND game_origin_id = ? AND base_ply = ?""",
-                (message.author, message.body, origin, origin_id, base_ply),
+                "INSERT INTO discussion_messages (discussion_id, author, body) VALUES (?, ?, ?)",
+                (row[0], message.author, message.body),
             )
 
-    def discussion_positions(self, origin: str, origin_id: str, base_ply: int) -> dict[str, object]:
-        row = self._connection.execute(
-            """SELECT d.id, d.active_node_id, COALESCE(n.resulting_fen, d.base_fen)
-            FROM discussions d LEFT JOIN variation_nodes n ON n.id = d.active_node_id
-            WHERE d.game_origin = ? AND d.game_origin_id = ? AND d.base_ply = ?""",
-            (origin, origin_id, base_ply),
-        ).fetchone()
-        if row is None:
-            raise ValueError("Discussion not found")
-        nodes = self._connection.execute(
-            "SELECT id, parent_id, author, move_uci, move_san, resulting_fen FROM variation_nodes WHERE discussion_id = ? ORDER BY id",
-            (row[0],),
-        ).fetchall()
-        return {
-            "active_node_id": row[1], "active_position": row[2],
-            "variations": [
-                dict(zip(("id", "parent_id", "author", "uci", "san", "fen"), node))
-                for node in nodes
-            ],
-        }
-
     def set_trainer_consent(self, accepted: bool) -> None:
-        with self._connection:
+        with self._discussion_lock, self._connection:
             self._connection.execute(
                 "UPDATE trainer_preferences SET consent_accepted = ? WHERE id = 1",
                 (int(accepted),),

@@ -10,6 +10,13 @@ from urllib.request import urlopen
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def cli_uses_current_worktree(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The CLI runs from a temporary cwd; a relative PYTHONPATH would instead
+    # exercise whichever checkout is installed in the shared virtualenv.
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).parents[1] / "src"))
+
+
 def _config(tmp_path: Path) -> str:
     flyway = Path(__file__).parent / "flyway_stub.py"
     flyway.chmod(0o755)
@@ -86,7 +93,7 @@ def test_serve_starts_the_configured_application(tmp_path: Path) -> None:
     assert "Personal Chess Trainer" in body
     assert (tmp_path / "trainer.db").is_file()
     with sqlite3.connect(tmp_path / "trainer.db") as database:
-        assert database.execute("PRAGMA user_version").fetchone() == (5,)
+        assert database.execute("PRAGMA user_version").fetchone() == (7,)
 
 
 def test_serve_refuses_to_start_when_flyway_validation_fails(tmp_path: Path) -> None:

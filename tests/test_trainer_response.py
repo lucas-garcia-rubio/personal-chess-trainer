@@ -1,22 +1,23 @@
 from collections.abc import Callable
 import json
+from typing import cast
 
 import httpx
 
 from fastapi.testclient import TestClient
 
 from lichess_mock import LichessMock
+from test_discussion import _trainer_data
 from test_trainer_runtime import FakeTrainerRuntime
 from trainer.application.ports import TrainerRuntimeAvailability
 from trainer.bootstrap import create_app
 from trainer.config import Settings
-from test_discussion import _trainer_data
-from typing import cast
 
 
 class FakeOpenCode:
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
+        self.sessions_created = 0
 
     def start(self) -> TrainerRuntimeAvailability:
         return TrainerRuntimeAvailability.available()
@@ -25,6 +26,7 @@ class FakeOpenCode:
         pass
 
     def create_session(self) -> str:
+        self.sessions_created += 1
         return "session-first"
 
     def respond(self, session_id: str, system: str, context: str) -> str:
@@ -109,6 +111,7 @@ def test_first_response_has_full_context_and_survives_restart_safely(
             "base_ply": "0", "message": "And now?", "initial_moves": "[]",
         })
         assert len(runtime.requests) == 2
+        assert runtime.sessions_created == 1
         assert runtime.requests[1].url.path == "/session-first"
         client.post("/trainer/consent", json={"accepted": False})
         assert client.post("/analyses/lichess/q7ZvsdUF/discussions", data=fields).status_code == 403
@@ -185,4 +188,72 @@ def test_production_http_exchange_only_persists_visible_assistant_text(
         page = client.get("/analyses/lichess/q7ZvsdUF")
         assert _trainer_data(page.text)["discussions"] == {"0": discussion}
         for excluded in ("HIDDEN_REASONING", "RAW_TOOL_EVENT", "TECHNICAL_PROMPT", "IGNORED_TEXT", "WRONG_SESSION", "EXECUTABLE", "ephemeral-user", "ephemeral-password"):
+            assert excluded not in page.text
+
+
+def test_context_tracks_critical_moment_all_branches_and_selected_position(
+    migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock
+) -> None:
+    document = json.loads(lichess_mock.fixture)
+    document["moves"] = "d4 d5"
+    document["analysis"] = [{"eval": -400, "best": "e2e4"}, {"eval": -400}]
+    runtime = FakeOpenCode()
+    with TestClient(create_app(
+        migrated_settings("Lance5500"),
+        lichess_transport=lichess_mock.games_for("Lance5500", ndjson=json.dumps(document)),
+        trainer_runtime=runtime,
+    )) as client:
+        client.post("/sync")
+        client.post("/trainer/consent", json={"accepted": True})
+        page = client.post("/analyses/lichess/q7ZvsdUF/discussions", data={
+            "base_ply": "0", "message": "Compare", "initial_moves": '["e2e4"]',
+        })
+        discussion = cast(dict[str, dict[str, object]], _trainer_data(page.text)["discussions"])["0"]
+        branch = client.post("/analyses/lichess/q7ZvsdUF/discussions/0/moves", json={
+            "revision": discussion["revision"], "parentId": None, "uci": "d2d4",
+        })
+        assert branch.status_code == 200
+        client.post("/analyses/lichess/q7ZvsdUF/discussions", data={
+            "base_ply": "0", "message": "Compare both", "initial_moves": "[]",
+        })
+        context = json.loads(runtime.requests[-1].content)["context"]
+        assert context["critical_moment"]["ply"] == 1
+        assert context["critical_moment"]["played"] == "d4"
+        assert context["critical_moment"]["best"] == "e4"
+        assert context["critical_moment"]["classification"] == "Blunder"
+        assert [node["san"] for node in context["variations"]] == ["e4", "d4"]
+        assert context["active_position"] == branch.json()["activeFen"]
+        assert context["active_node_id"] == branch.json()["activeNodeId"]
+        assert context["revision"] > branch.json()["revision"]
+        assert context["history"][-1] == {"author": "player", "body": "Compare both"}
+
+
+def test_provider_failure_keeps_player_message_without_leaking_technical_details(
+    migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock
+) -> None:
+    class FailingOpenCode(FakeOpenCode):
+        def respond(self, session_id: str, system: str, context: str) -> str:
+            raise RuntimeError("PRIVATE_PROVIDER_ERROR ephemeral-password HIDDEN_REASONING")
+
+    settings = migrated_settings("Lance5500")
+    with TestClient(create_app(
+        settings, lichess_transport=lichess_mock.games_for("Lance5500"),
+        trainer_runtime=FailingOpenCode(),
+    )) as client:
+        client.post("/sync")
+        client.post("/trainer/consent", json={"accepted": True})
+        response = client.post("/analyses/lichess/q7ZvsdUF/discussions", data={
+            "base_ply": "0", "message": "Help me calculate", "initial_moves": "[]",
+        })
+        assert response.status_code == 503
+        assert response.json() == {"detail": "Trainer response failed. Your Discussion is saved; please try again."}
+        assert client.get("/").status_code == 200
+
+    with TestClient(create_app(
+        settings, lichess_transport=lichess_mock.fail_on_request("offline reopen"),
+    )) as client:
+        page = client.get("/analyses/lichess/q7ZvsdUF")
+        discussion = cast(dict[str, dict[str, object]], _trainer_data(page.text)["discussions"])["0"]
+        assert discussion["messages"] == [{"author": "player", "body": "Help me calculate"}]
+        for excluded in ("PRIVATE_PROVIDER_ERROR", "ephemeral-password", "HIDDEN_REASONING"):
             assert excluded not in page.text
