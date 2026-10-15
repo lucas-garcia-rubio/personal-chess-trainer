@@ -82,9 +82,9 @@ class EvaluatePosition:
 
     def consult(self, origin: str, origin_id: str, base_ply: int, *, attempt_id: int,
                 kind: str, ply: int | None, node_id: int | None,
-                preview_id: str | None = None) -> dict[str, object]:
+                preview_id: str | None = None, moves: list[str] | None = None) -> dict[str, object]:
         fen = self.resolve(origin, origin_id, base_ply, kind=kind, ply=ply,
-                           node_id=node_id, preview_id=preview_id)
+                           node_id=node_id, preview_id=preview_id, moves=moves)
         attempt = next(a for a in self.storage.response_attempts(origin, origin_id, base_ply)
                        if a.id == attempt_id)
         if attempt.status != "running":
@@ -97,7 +97,14 @@ class EvaluatePosition:
 
     def resolve(self, origin: str, origin_id: str, base_ply: int, *,
                 kind: str, ply: int | None, node_id: int | None,
-                preview_id: str | None = None) -> str:
+                preview_id: str | None = None, moves: list[str] | None = None) -> str:
+        if kind == "exploration" and ply == base_ply and node_id is None and preview_id is None:
+            if not moves or len(moves) > 12:
+                raise ValueError("Exploration must contain 1 to 12 plies")
+            line = validated_line(game_position(self.storage, origin, origin_id, base_ply), moves, player=True)
+            return line[-1].resulting_fen
+        if moves:
+            raise ValueError("Unexpected exploration moves")
         if kind == "preview" and ply is not None and node_id is None:
             preview = self._preview((origin, origin_id, base_ply), preview_id)
             if not 0 <= ply <= len(preview.moves):
@@ -113,15 +120,19 @@ class EvaluatePosition:
 
     def best_line(self, origin: str, origin_id: str, base_ply: int, *,
                   kind: str, ply: int | None, node_id: int | None,
-                  preview_id: str | None = None) -> dict[str, object]:
+                  preview_id: str | None = None, moves: list[str] | None = None) -> dict[str, object]:
         key = (origin, origin_id, base_ply)
         base_fen = game_position(self.storage, origin, origin_id, base_ply)
-        fen = self.resolve(*key, kind=kind, ply=ply, node_id=node_id, preview_id=preview_id)
+        fen = self.resolve(*key, kind=kind, ply=ply, node_id=node_id, preview_id=preview_id, moves=moves)
         discussion = next((d for d in self.storage.list_discussions(origin, origin_id)
                            if d.base_ply == base_ply), None)
         revision = discussion.revision if discussion else None
         parent_id = node_id if kind == "variation" else None
         prefix: list[VariationMove] = []
+        if kind == "exploration":
+            if discussion:
+                raise ValueError("Exploration is only valid before Discussion creation")
+            prefix = validated_line(base_fen, moves or [], player=True)
         if kind == "game" and ply != base_ply:
             raise ValueError("Preview must start at the selected Base Position")
         if kind == "preview":
@@ -133,9 +144,9 @@ class EvaluatePosition:
             raise BestLineUnavailable(str(evidence["reason"]))
         best = cast(list[dict[str, object]], evidence["candidates"])[0]
         line = cast(list[dict[str, str]], best["moves"])
-        moves = validated_line(fen, [move["uci"] for move in line])
+        preview_moves = validated_line(fen, [move["uci"] for move in line])
         identifier = secrets.token_urlsafe(24)
-        self._previews[identifier] = _Preview(key, revision, parent_id, base_fen, fen, prefix, moves)
+        self._previews[identifier] = _Preview(key, revision, parent_id, base_fen, fen, prefix, preview_moves)
         while len(self._previews) > 128:
             self._previews.popitem(last=False)
         return {"previewId": identifier, "label": "Best Line preview", "basePly": base_ply,

@@ -103,8 +103,13 @@ class SQLiteStorage:
             )
             assert cursor.lastrowid is not None
             attempt_id = cursor.lastrowid
+            discussion = next(d for d in self.list_discussions(origin, origin_id) if d.base_ply == base_ply)
+            snapshot = {"base_fen": discussion.base_fen, "revision": discussion.revision,
+                        "active_node_id": discussion.active_node_id,
+                        "nodes": [asdict(node) for node in discussion.nodes]}
             self._connection.execute(
-                "INSERT INTO trainer_events VALUES (?, 1, 'running', '')", (attempt_id,),
+                "INSERT INTO trainer_events VALUES (?, 1, 'running', ?)",
+                (attempt_id, json.dumps(snapshot)),
             )
         return next(
             a for a in self.response_attempts(origin, origin_id, base_ply)
@@ -148,6 +153,14 @@ class SQLiteStorage:
                 """INSERT INTO trainer_events SELECT ?, COALESCE(MAX(sequence), 0) + 1, ?, ?
                 FROM trainer_events WHERE attempt_id = ?""", (attempt_id, event.type, event.text, attempt_id),
             )
+
+    def discussion_requests(self, origin: str, origin_id: str, base_ply: int) -> list[tuple[int, str]]:
+        with self._discussion_lock:
+            return list(self._connection.execute(
+                """SELECT m.id, m.body FROM discussion_messages m JOIN discussions d ON d.id = m.discussion_id
+                WHERE d.game_origin = ? AND d.game_origin_id = ? AND d.base_ply = ? AND m.author = 'player'
+                ORDER BY m.id""", (origin, origin_id, base_ply),
+            ))
 
     def recover_responses(self) -> None:
         with self._discussion_lock:
@@ -573,6 +586,18 @@ class SQLiteStorage:
             self._connection.execute(
                 "UPDATE discussions SET active_node_id = ? WHERE id = ?",
                 (node_id, discussion_id),
+            )
+
+    def select_and_append_request(self, origin: str, origin_id: str, base_ply: int,
+                                  revision: int, node_id: int | None, message: str) -> None:
+        with self._discussion_lock, self._connection:
+            discussion_id = self._advance_revision(origin, origin_id, base_ply, revision)
+            self._validate_node(discussion_id, node_id)
+            self._connection.execute("UPDATE discussions SET active_node_id = ? WHERE id = ?",
+                                     (node_id, discussion_id))
+            self._connection.execute(
+                "INSERT INTO discussion_messages (discussion_id, author, body) VALUES (?, 'player', ?)",
+                (discussion_id, message),
             )
 
     def close(self) -> None:
