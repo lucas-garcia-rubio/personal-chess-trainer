@@ -54,5 +54,16 @@ position, absence of selection writes during inspection, and the Position actual
 received by the Trainer on the next send. `tests/test_inspected_position.py` also
 checks that next-send contract over HTTP, including unchanged Game, Analysis, Base
 Position, Variation nodes and prior Discussion messages.
-Streaming tail following and background Discussion isolation
-have separate owners in the spec 32 verification plan.
+
+`test_scroll.py` controls individual streaming chunks through a gated runtime and
+uses public MCP tools to interleave demonstrated moves and Evaluator evidence.
+At 1280×600 and 1280×768 it checks tail following, stable reading through fragment
+replacement, tab changes and completion, and explicit return to recent content.
+Growing the desktop window near the tail must also preserve the paused reading
+intent, even when the browser temporarily clamps the scroll position.
+It also checks that reading history does not suspend board following and that
+returning to recent content does not resume a manually paused board. Long responses
+stay in the history's scroll flow, with the board and composer visible.
+
+Background Discussion isolation has a separate owner in the spec 32 verification
+plan.
