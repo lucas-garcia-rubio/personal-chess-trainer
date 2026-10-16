@@ -7,3 +7,8 @@ __pycache__/
 config.toml
 data/
 flyway-13.9.0/
+
+# BEGIN oh-my-opencode-slim worktrees
+.slim/worktrees/
+.slim/worktrees.json
+# END oh-my-opencode-slim worktrees
