@@ -144,6 +144,81 @@
         background: #211e19;
         color: inherit;
       }
+      /* The desktop workspace owns the viewport; only reading regions scroll. */
+      @media (min-width: 48.01rem) {
+        main {
+          width: min(90rem, calc(100% - 2rem));
+          height: calc(100dvh - 2rem);
+          margin: 1rem auto;
+          display: grid;
+          grid-template-rows: auto minmax(0, 1fr);
+          gap: 0.75rem;
+        }
+        .page-heading h1 { margin: 0.25rem 0; font-size: 1.4rem; }
+        .page-heading p { margin: 0.25rem 0 0; }
+        .layout {
+          min-height: 0;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+          gap: 1.25rem;
+          align-items: stretch;
+        }
+        .board-panel { display: flex; flex-direction: column; min-height: 0; }
+        .board-space {
+          flex: 1;
+          min-height: 0;
+          container-type: size;
+          display: grid;
+          place-items: center;
+        }
+        .board { width: min(100cqw, 100cqh, 32rem); }
+        .board-controls, .navigation-modes, .best-line-actions {
+          flex: none;
+          max-width: none;
+          margin-top: 0.5rem;
+          gap: 0.5rem;
+        }
+        .best-line-actions { flex-wrap: wrap; }
+        .content-panel { display: flex; flex-direction: column; min-height: 0; }
+        .tabs { flex: none; margin-bottom: 0.5rem; }
+        [data-panel="analysis"] { flex: 1; min-height: 0; overflow-y: auto; }
+        [data-panel="trainer"] {
+          flex: 1;
+          min-height: 0;
+          display: flex;
+          flex-direction: column;
+          position: relative;
+        }
+        [data-panel="trainer"] > h2 { margin: 0 0 0.25rem; font-size: 1rem; }
+        [data-panel="trainer"] > [role] { margin: 0.25rem 0; }
+        [data-discussion-history] { flex: 1; min-height: 0; overflow-y: auto; }
+        .trainer-footer { flex: none; border-top: 1px solid #665d50; padding-top: 0.5rem; }
+        .trainer-form { gap: 0.35rem; margin-top: 0.5rem; }
+        .trainer-form textarea { min-height: 3rem; height: 3rem; resize: none; }
+        .trainer-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+        .board-details { position: relative; flex: none; margin-top: 0.5rem; }
+        .board-details > div, .trainer-settings > div {
+          position: absolute;
+          z-index: 5;
+          left: 0;
+          right: 0;
+          bottom: calc(100% + 0.5rem);
+          max-height: 45vh;
+          overflow-y: auto;
+          padding: 0.75rem;
+          border: 1px solid #665d50;
+          border-radius: 0.25rem;
+          background: #24201b;
+          box-shadow: 0 0.5rem 1.5rem #0008;
+        }
+        .trainer-settings { position: relative; }
+        .evaluation-panel { margin-top: 0.5rem; }
+      }
+      summary { cursor: pointer; }
+      [data-discussion-history], [data-panel="analysis"] {
+        overscroll-behavior: contain;
+        scrollbar-gutter: stable;
+        overflow-wrap: anywhere;
+      }
       @media (max-width: 48rem) {
         .layout { grid-template-columns: 1fr; }
       }
@@ -151,12 +226,16 @@
   </head>
   <body>
     <main>
-      <a href="/">← Home</a>
-      <h1>Analysis vs {{ analysis.opponent }}</h1>
-      <p>{{ analysis.result }} · {{ analysis.speed }} · {{ analysis.time_control }}</p>
+      <header class="page-heading">
+        <a href="/">← Home</a>
+        <h1>Analysis vs {{ analysis.opponent }}</h1>
+        <p>{{ analysis.result }} · {{ analysis.speed }} · {{ analysis.time_control }}</p>
+      </header>
       <div class="layout">
         <section class="board-panel">
-          <div class="board" aria-label="Game position" data-orientation="{{ analysis.player_color }}"></div>
+          <div class="board-space">
+            <div class="board" aria-label="Game position" data-orientation="{{ analysis.player_color }}"></div>
+          </div>
           <div class="board-controls" aria-label="Game navigation">
             <button type="button" data-direction="previous" disabled>← Previous</button>
             <output aria-live="polite">Start</output>
@@ -171,35 +250,40 @@
             <button type="button" data-action="practical-line"{% if not trainer_availability.is_available %} disabled{% endif %}>Mostrar linha prática</button>
             <button type="button" data-action="return-to-game" hidden>Return to Game</button>
           </div>
-          <aside class="best-line-preview" hidden aria-live="polite">
-            <h2>Best Line preview</h2>
-            <p data-preview-score></p>
-            <p data-preview-moves></p>
-            <p data-preview-provenance></p>
-            <button type="button" data-action="adopt-preview">Continue from this preview</button>
-          </aside>
-          <p class="best-line-error" data-best-line-error{% if not best_line_unavailable_reason %} hidden{% endif %} aria-live="polite">{{ best_line_unavailable_reason or "" }}</p>
-          <div class="highlight-key" aria-label="Move highlight legend">
-            <span data-brush="red">Played</span>
-            <span data-brush="green">Best</span>
-          </div>
-          <figure class="evaluation-panel">
-            <h2>Player Win%</h2>
-            {% if navigation.evaluations %}
-              <svg class="evaluation-curve" viewBox="0 0 1000 200" role="group" aria-label="Evaluation curve">
-                <line class="evaluation-midline" x1="0" y1="100" x2="1000" y2="100"></line>
-              </svg>
-            {% else %}
-              <p>No evaluations are available for this Game.</p>
-            {% endif %}
-          </figure>
+          <details class="board-details">
+            <summary>Board details</summary>
+            <div>
+              <aside class="best-line-preview" hidden aria-live="polite">
+                <h2>Best Line preview</h2>
+                <p data-preview-score></p>
+                <p data-preview-moves></p>
+                <p data-preview-provenance></p>
+                <button type="button" data-action="adopt-preview">Continue from this preview</button>
+              </aside>
+              <p class="best-line-error" data-best-line-error{% if not best_line_unavailable_reason %} hidden{% endif %} aria-live="polite">{{ best_line_unavailable_reason or "" }}</p>
+              <div class="highlight-key" aria-label="Move highlight legend">
+                <span data-brush="red">Played</span>
+                <span data-brush="green">Best</span>
+              </div>
+              <figure class="evaluation-panel">
+                <h2>Player Win%</h2>
+                {% if navigation.evaluations %}
+                  <svg class="evaluation-curve" viewBox="0 0 1000 200" role="group" aria-label="Evaluation curve">
+                    <line class="evaluation-midline" x1="0" y1="100" x2="1000" y2="100"></line>
+                  </svg>
+                {% else %}
+                  <p>No evaluations are available for this Game.</p>
+                {% endif %}
+              </figure>
+            </div>
+          </details>
         </section>
-        <section>
+        <section class="content-panel">
           <div class="tabs" role="tablist" aria-label="Analysis content">
-            <button type="button" role="tab">Analysis</button>
-            <button type="button" role="tab">Trainer</button>
+            <button type="button" id="analysis-tab" aria-controls="analysis-panel" role="tab">Analysis</button>
+            <button type="button" id="trainer-tab" aria-controls="trainer-panel" role="tab">Trainer</button>
           </div>
-          <div role="tabpanel" data-panel="analysis">
+          <div role="tabpanel" id="analysis-panel" aria-labelledby="analysis-tab" data-panel="analysis" tabindex="0">
             <h2>Critical Moments</h2>
           {% if analysis.has_evaluations %}
             {% for moment in analysis.critical_moments %}
@@ -218,34 +302,45 @@
             <p>No server evaluation is available for this Game.</p>
             {% endif %}
           </div>
-          <div role="tabpanel" data-panel="trainer" hidden>
+          <div role="tabpanel" id="trainer-panel" aria-labelledby="trainer-tab" data-panel="trainer" hidden>
             <h2>Trainer</h2>
             {% if trainer_availability.is_available %}
               <p role="status">Trainer available</p>
             {% else %}
               <p role="alert"><strong>Trainer unavailable.</strong> {{ trainer_availability.reason }}</p>
             {% endif %}
-            <div data-discussion-content>
-              {% for base_ply, view in discussion_views %}
-              {% include 'discussion.html' %}
-              {% endfor %}
+            <div data-discussion-history role="region" aria-label="Discussion history" tabindex="0">
+              <div data-discussion-content>
+                {% for base_ply, view in discussion_views %}
+                {% include 'discussion.html' %}
+                {% endfor %}
+              </div>
             </div>
-            <p>OpenCode may send Game moves, Analysis, Variations and Discussion text,
-              including the Player's rating, to its configured provider. Acceptance is
-              stored locally and can be revoked here to block new sends.</p>
-            <label><input type="checkbox" id="trainer-consent" form="trainer-message-form" required{% if trainer_consent %} checked{% endif %}>
-              I consent to sending this data through OpenCode.</label>
-            <button type="button" data-action="delete-discussion" hidden>Delete Discussion</button>
-            <button type="button" data-action="interrupt-response" hidden>Interrupt response</button>
-            <button type="button" data-action="retry-response" hidden>Tentar novamente</button>
-            <p data-discussion-error role="status" hidden></p>
-            <form id="trainer-message-form" class="trainer-form" method="post" action="/analyses/{{ origin }}/{{ origin_id }}/discussions">
-              <input type="hidden" name="base_ply" value="0">
-              <input type="hidden" name="initial_moves" value="[]">
-              <label for="trainer-message">Discuss this Position</label>
-              <textarea id="trainer-message" name="message" required{% if not trainer_availability.is_available %} disabled{% endif %}></textarea>
-              <button type="submit"{% if not trainer_availability.is_available %} disabled{% endif %}>Send to Trainer</button>
-            </form>
+            <div class="trainer-footer">
+              <details class="trainer-settings">
+                <summary>Trainer settings and consent</summary>
+                <div>
+                  <p>OpenCode may send Game moves, Analysis, Variations and Discussion text,
+                    including the Player's rating, to its configured provider. Acceptance is
+                    stored locally and can be revoked here to block new sends.</p>
+                  <label><input type="checkbox" id="trainer-consent" form="trainer-message-form" required{% if trainer_consent %} checked{% endif %}>
+                    I consent to sending this data through OpenCode.</label>
+                </div>
+              </details>
+              <div class="trainer-actions">
+                <button type="button" data-action="delete-discussion" hidden>Delete Discussion</button>
+                <button type="button" data-action="interrupt-response" hidden>Interrupt response</button>
+                <button type="button" data-action="retry-response" hidden>Tentar novamente</button>
+              </div>
+              <p data-discussion-error role="status" hidden></p>
+              <form id="trainer-message-form" class="trainer-form" method="post" action="/analyses/{{ origin }}/{{ origin_id }}/discussions">
+                <input type="hidden" name="base_ply" value="0">
+                <input type="hidden" name="initial_moves" value="[]">
+                <label for="trainer-message">Discuss this Position</label>
+                <textarea id="trainer-message" name="message" required{% if not trainer_availability.is_available %} disabled{% endif %}></textarea>
+                <button type="submit"{% if not trainer_availability.is_available %} disabled{% endif %}>Send to Trainer</button>
+              </form>
+            </div>
           </div>
         </section>
       </div>
@@ -267,6 +362,8 @@
       const moments = [...document.querySelectorAll(".moment")];
       const tabs = [...document.querySelectorAll('[role="tab"]')];
       const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+      const discussionHistory = document.querySelector("[data-discussion-history]");
+      const tabScrollPositions = new Map();
       const discussionContent = document.querySelector("[data-discussion-content]");
       const deleteDiscussionButton = document.querySelector('[data-action="delete-discussion"]');
       const discussionError = document.querySelector("[data-discussion-error]");
@@ -349,6 +446,9 @@
         };
       }
 
+      document.querySelector("#trainer-consent").addEventListener("invalid", () => {
+        document.querySelector(".trainer-settings").open = true;
+      });
       trainerForm.addEventListener("submit", async (event) => {
         event.preventDefault();
         const basePly = gameIndex;
@@ -660,10 +760,20 @@
       });
 
       function selectTab(name) {
+        for (const panel of panels) {
+          if (!panel.hidden) {
+            const scroller = panel.dataset.panel === "trainer" ? discussionHistory : panel;
+            tabScrollPositions.set(panel.dataset.panel, scroller.scrollTop);
+          }
+        }
         for (const [index, tab] of tabs.entries()) {
           const selected = (index === 0 ? "analysis" : "trainer") === name;
           tab.setAttribute("aria-selected", String(selected));
           panels[index].hidden = !selected;
+          if (selected) {
+            const scroller = name === "trainer" ? discussionHistory : panels[index];
+            scroller.scrollTop = tabScrollPositions.get(name) || 0;
+          }
         }
       }
 
@@ -812,11 +922,13 @@
           previewPanel.querySelector("[data-preview-provenance]").textContent =
             `Evaluator: ${result.provenance.name}${result.provenance.version ? ` ${result.provenance.version}` : ""} (${result.provenance.sourceKind}${parameters ? `; ${parameters}` : ""})`;
           previewPanel.hidden = false;
+          previewPanel.closest("details").open = true;
           returnToGameButton.hidden = false;
           showPosition(0);
         } catch (error) {
           previewError.textContent = error.message;
           previewError.hidden = false;
+          previewError.closest("details").open = true;
         } finally {
           bestLineButton.disabled = false;
         }
@@ -836,10 +948,7 @@
         );
       }
       tabs[0].addEventListener("click", () => selectTab("analysis"));
-      tabs[1].addEventListener("click", () => {
-        selectTab("trainer");
-        if (trainerData.discussions[String(gameIndex)]) showDiscussion();
-      });
+      tabs[1].addEventListener("click", () => selectTab("trainer"));
       renderEvaluationCurve();
       const query = new URLSearchParams(window.location.search);
       showGamePosition(Number(query.get("ply") || 0));

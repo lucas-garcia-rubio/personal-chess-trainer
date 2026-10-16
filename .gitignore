@@ -12,3 +12,6 @@ flyway-13.9.0/
 .slim/worktrees/
 .slim/worktrees.json
 # END oh-my-opencode-slim worktrees
+
+# Desktop browser verification dependencies
+node_modules/
