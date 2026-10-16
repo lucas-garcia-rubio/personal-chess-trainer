@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "description": "Real desktop browser contracts for the Analysis workspace",
+  "devDependencies": { "playwright": "1.57.0" }
+}
