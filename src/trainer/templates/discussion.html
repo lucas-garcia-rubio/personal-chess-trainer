@@ -37,7 +37,7 @@
     <strong>Verified Evaluator evidence</strong>
     {% for candidate in evidence.candidates %}<p data-score-value="{{ candidate.score.value }}">Candidate {{ loop.index }} · Player score: {{ candidate.score.kind }} {{ candidate.score.value }} · {{ entry.candidateLines[loop.index0] }}</p>{% endfor %}
     <details data-evaluation-disclosure="consultation-{{ item.attemptId }}-{{ entry.sequence }}"><summary>Evaluator technical details</summary>
-      <p>{{ evidence.provenance.name }} {{ evidence.provenance.version or '' }} · {{ evidence.provenance.parameters }}</p>
+      <p>{{ evidence.provenance.name }} · {{ evidence.provenance.parameters }}</p>
       <p>Position FEN: {{ evidence.position }}</p>
     </details>
     {% else %}<strong>Evaluator unavailable · Trainer judgment is unverified</strong><p>{{ evidence.reason }}</p>{% endif %}
