@@ -37,3 +37,9 @@ assertion output includes geometry on visibility failures.
 These tests establish desktop geometry and tab restoration. Streaming tail
 following, response grouping, move following, keyboard composition, and background
 Discussion isolation have separate owners in the spec 32 verification plan.
+
+`test_evidence.py` checks initially collapsed Evaluator consultations within a
+Trainer response, readable Position/line references, verified and unavailable
+results, and secondary technical details. It releases a controlled response
+while the Player has evaluations open to verify that streaming preserves their
+expansion. Reloading starts collapsed again and retains the consultation content.

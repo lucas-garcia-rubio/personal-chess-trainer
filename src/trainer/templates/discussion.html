@@ -6,14 +6,7 @@
 <header>Trainer: {% if item.retry %}<span>New attempt</span>{% endif %}</header>
 {% for entry in item.entries %}
   {% if entry.type == 'evidence' %}
-  {% set evidence = entry.value %}
-  <article class="evaluator-evidence" data-attempt-id="{{ entry.attemptId }}" data-sequence="{{ entry.sequence }}">
-    <strong>Evaluator evidence</strong>
-    {% if evidence.status == 'verified' %}
-    <p>{{ evidence.provenance.name }} {{ evidence.provenance.version or '' }} · {{ evidence.provenance.parameters }}</p>
-    {% for candidate in evidence.candidates %}<p data-score-value="{{ candidate.score.value }}">Player score: {{ candidate.score.kind }} {{ candidate.score.value }} · {% for move in candidate.moves %}{{ move.san }} {% endfor %}</p>{% endfor %}
-    {% else %}<p>{{ evidence.reason }}</p>{% endif %}
-  </article>
+  {# Queries are collected in the response disclosure below. #}
   {% elif entry.type == 'practical_line' %}
   {% set line = entry.value %}
   <article class="practical-line-evidence" data-attempt-id="{{ entry.attemptId }}" data-sequence="{{ entry.sequence }}">
@@ -28,6 +21,30 @@
   <p class="discussion-entry"{% if entry.sequence is defined %} data-sequence="{{ entry.sequence }}"{% endif %}>{% if entry.type == 'player' %}Player: {% elif entry.type == 'text' %}{% else %}{{ entry.type }}: {% endif %}{{ entry.text }}</p>
   {% endif %}
 {% endfor %}
+{% set queries = item.entries | selectattr('type', 'equalto', 'evidence') | list %}
+{% if queries %}
+<details data-evaluation-disclosure="response-{{ item.attemptId }}">
+  <summary>Ver avaliações</summary>
+  {% for entry in queries %}
+  {% set evidence = entry.value %}
+  <article class="evaluator-evidence" aria-label="Evaluator consultation" data-attempt-id="{{ entry.attemptId }}" data-sequence="{{ entry.sequence }}">
+    {% if evidence.context %}
+    <h4>{{ evidence.context.position }}</h4><p>Line: {{ evidence.context.line }}</p>
+    {% else %}
+    <h4>{{ entry.positionLabel }}</h4><p>Line: {{ entry.lineLabel }}</p>
+    {% endif %}
+    {% if evidence.status == 'verified' %}
+    <strong>Verified Evaluator evidence</strong>
+    {% for candidate in evidence.candidates %}<p data-score-value="{{ candidate.score.value }}">Candidate {{ loop.index }} · Player score: {{ candidate.score.kind }} {{ candidate.score.value }} · {{ entry.candidateLines[loop.index0] }}</p>{% endfor %}
+    <details data-evaluation-disclosure="consultation-{{ item.attemptId }}-{{ entry.sequence }}"><summary>Evaluator technical details</summary>
+      <p>{{ evidence.provenance.name }} {{ evidence.provenance.version or '' }} · {{ evidence.provenance.parameters }}</p>
+      <p>Position FEN: {{ evidence.position }}</p>
+    </details>
+    {% else %}<strong>Evaluator unavailable · Trainer judgment is unverified</strong><p>{{ evidence.reason }}</p>{% endif %}
+  </article>
+  {% endfor %}
+</details>
+{% endif %}
 {% if item.status != 'completed' %}<p role="status">{{ {'running': 'Responding…', 'failed': 'Response failed. Your Discussion is saved.', 'interrupted': 'Response interrupted.', 'limited': 'Response paused at its limit.'}[item.status] }}</p>{% endif %}
 </section>
 {% endif %}

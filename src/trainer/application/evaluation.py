@@ -83,17 +83,70 @@ class EvaluatePosition:
     def consult(self, origin: str, origin_id: str, base_ply: int, *, attempt_id: int,
                 kind: str, ply: int | None, node_id: int | None,
                 preview_id: str | None = None, moves: list[str] | None = None) -> dict[str, object]:
-        fen = self.resolve(origin, origin_id, base_ply, kind=kind, ply=ply,
-                           node_id=node_id, preview_id=preview_id, moves=moves)
         attempt = next(a for a in self.storage.response_attempts(origin, origin_id, base_ply)
                        if a.id == attempt_id)
         if attempt.status != "running":
             raise ValueError("Response is no longer active")
         if sum(event["type"] == "evidence" for event in attempt.events) >= 3:
             raise EvaluationLimit
-        evidence = self(origin, origin_id, fen)
+        evidence = self.evaluate_reference(origin, origin_id, base_ply, kind=kind, ply=ply,
+                                          node_id=node_id, preview_id=preview_id, moves=moves)
         self.storage.record_response_event(attempt_id, TrainerEvent("evidence", json.dumps(evidence)))
         return evidence
+
+    def evaluate_reference(self, origin: str, origin_id: str, base_ply: int, *,
+                           kind: str, ply: int | None, node_id: int | None,
+                           preview_id: str | None = None, moves: list[str] | None = None) -> dict[str, object]:
+        fen = self.resolve(origin, origin_id, base_ply, kind=kind, ply=ply,
+                           node_id=node_id, preview_id=preview_id, moves=moves)
+        context = self._position_context(origin, origin_id, base_ply, kind, ply, node_id, preview_id, moves)
+        evidence = self(origin, origin_id, fen)
+        evidence["context"] = context
+        return evidence
+
+    def _position_context(self, origin: str, origin_id: str, base_ply: int, kind: str,
+                          ply: int | None, node_id: int | None, preview_id: str | None,
+                          moves: list[str] | None) -> dict[str, str]:
+        # Capture the actual path now: transient previews and transpositions
+        # cannot be reconstructed unambiguously from a FEN on replay.
+        discussion = get_discussion(self.storage, origin, origin_id, base_ply)
+        fen = discussion.base_fen
+        line: list[str] = []
+        if kind == "game":
+            canonical = self.storage.get_canonical_document(origin, origin_id)
+            assert canonical is not None
+            game = cast(list[str], json.loads(canonical))
+            fen = game[0]
+            board = chess.Board(fen)
+            for san in game[1].split()[:ply]:
+                line.append(board.parse_san(san).uci())
+                board.push_san(san)
+        else:
+            suffix: list[str] = []
+            if kind == "preview":
+                preview = self._preview((origin, origin_id, base_ply), preview_id)
+                node_id = preview.parent_id
+                suffix = [m.uci for m in preview.prefix + preview.moves[:ply]]
+            elif kind == "exploration":
+                suffix = moves or []
+            nodes = {node.id: node for node in discussion.nodes}
+            while node_id is not None:
+                node = nodes[node_id]
+                line.insert(0, node.uci)
+                node_id = node.parent_id
+            line += suffix
+        board = chess.Board(fen)
+        labels = []
+        for uci in line:
+            move = board.parse_uci(uci)
+            prefix = str(board.fullmove_number) + ("." if board.turn else "...")
+            labels.append(f"{prefix} {board.san(move)}")
+            board.push(move)
+        source = {"game": "Game", "variation": "Variation", "preview": "Evaluator preview",
+                  "exploration": "Exploration"}[kind]
+        position = f"Position after {labels[-1]}" if labels else (
+            "Initial Position" if kind == "game" else "Base Position")
+        return {"position": f"{source} · {position}", "line": " ".join(labels) or position}
 
     def resolve(self, origin: str, origin_id: str, base_ply: int, *,
                 kind: str, ply: int | None, node_id: int | None,

@@ -152,6 +152,9 @@ def test_mcp_can_evaluate_a_controlled_preview_but_cannot_adopt_while_responding
             })
             assert not result["isError"]
             assert evaluator.requests[-1] == (preview["moves"][0]["fen"], 3)
+            assert result["structuredContent"]["context"] == {
+                "position": "Evaluator preview · Position after 1. Nh3", "line": "1. Nh3",
+            }
             before = client.get(URL + "/0").json()
             assert client.post(URL + "/0/adopt-preview", json={"previewId": preview["previewId"], "plies": 1}).status_code == 409
             assert client.get(URL + "/0").json() == before
@@ -240,6 +243,11 @@ def test_evaluator_consultations_are_scoped_and_limited_per_response(
             runtime.release.set()
         assert events(client, retry["eventsUrl"])[-1]["type"] == "completed"
         assert len([m for m in client.get(URL + "/0").json()["messages"] if m["author"] == "player"]) == 1
+        fragment = client.get(URL + "/0/fragment").text
+        responses = fragment.split('aria-label="Trainer response"')[1:]
+        assert len(responses) == 2
+        assert [response.count('aria-label="Evaluator consultation"') for response in responses] == [3, 1]
+        assert all(response.count('<summary>Ver avaliações</summary>') == 1 for response in responses)
 
 
 @pytest.mark.parametrize("failure", ["missing", "failed"])
@@ -268,6 +276,10 @@ def test_unavailable_evaluator_is_explicit_without_stopping_chess_teaching(
         assert output[-1]["type"] == "completed"
         assert any(e["type"] == "text" for e in output)
         assert client.get("/").status_code == 200
+        fragment = client.get(URL + "/0/fragment").text
+        assert 'Evaluator unavailable · Trainer judgment is unverified' in fragment
+        assert 'Player score:' not in fragment
+        assert 'Verified Evaluator evidence' not in fragment
 
 
 def test_best_line_targets_a_variation_and_adopts_only_server_validated_preview_moves(
@@ -307,3 +319,93 @@ def test_best_line_targets_a_variation_and_adopts_only_server_validated_preview_
         assert client.get("/analyses/lichess/q7ZvsdUF").text.split('id="analysis-navigation"')[1].split('</script>')[0] == game_before
     with TestClient(create_app(settings, lichess_transport=lichess_mock.fail_on_request("offline"))) as client:
         assert client.get(URL + "/0").json() == saved
+
+
+def test_consultations_have_durable_readable_positions_and_cursor_scoped_disclosures(
+    migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock,
+) -> None:
+    settings = migrated_settings("Lance5500")
+    runtime = ToolOpenCode()
+    with TestClient(create_app(settings, lichess_transport=lichess_mock.games_for("Lance5500"),
+                              trainer_runtime=runtime, candidate_evaluator=EvidenceEvaluator())) as client:
+        client.post("/sync")
+        client.post("/trainer/consent", json={"accepted": True})
+        attempt = client.post(URL, data={"base_ply": "0", "message": "Compare positions", "stream": "true",
+                                         "initial_moves": '["e2e4", "e7e5"]'}).json()
+        assert runtime.ready.wait(5)
+        try:
+            nodes = client.get(URL + "/0").json()["nodes"]
+            for position in [{"kind": "game", "ply": 0}, {"kind": "variation", "node_id": nodes[-1]["id"]}]:
+                assert not call(client, runtime.token, "evaluate_position", {
+                    "attempt_id": attempt["id"], "position": position,
+                })["isError"]
+        finally:
+            runtime.release.set()
+        rendered = events(client, attempt["eventsUrl"] + "?render=true")
+        evidence = [e for e in rendered if e["type"] == "evidence"]
+        assert 'Ver avaliações' in evidence[0]["html"]
+        assert 'Game · Initial Position' in evidence[0]["html"]
+        assert 'Variation · Position after 1... e5' not in evidence[0]["html"]
+        final = client.get(URL + "/0/fragment").text
+        assert 'Variation · Position after 1... e5' in final
+        assert 'Line: 1. e4 1... e5' in final
+        assert final.count('<summary>Ver avaliações</summary>') == 1
+        assert final.index('Player score:') < final.index('Evaluator technical details')
+        assert 'Verified Evaluator evidence' in final
+        replay = events(client, attempt["eventsUrl"] + "?render=true")
+        assert [e for e in replay if e["type"] == "evidence"] == evidence
+        assert replay[-1]["html"] == rendered[-1]["html"]
+    with TestClient(create_app(settings, lichess_transport=lichess_mock.fail_on_request("offline"))) as client:
+        assert client.get(URL + "/0/fragment").text == final
+
+
+def test_transposed_positions_keep_the_consulted_line_after_reopening(
+    migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock,
+) -> None:
+    settings = migrated_settings("Lance5500")
+    runtime = ToolOpenCode()
+    with TestClient(create_app(settings, lichess_transport=lichess_mock.games_for("Lance5500"))) as client:
+        client.post("/sync")
+        client.post(URL, data={"base_ply": "0", "message": "Explore transpositions"})
+        endpoints = []
+        for moves in [["g1f3", "g8f6", "b1c3", "b8c6"], ["b1c3", "b8c6", "g1f3", "g8f6"]]:
+            parent = None
+            for uci in moves:
+                saved = client.get(URL + "/0").json()
+                moved = client.post(URL + "/0/moves", json={
+                    "revision": saved["revision"], "parentId": parent, "uci": uci,
+                })
+                assert moved.status_code == 200
+                parent = moved.json()["activeNodeId"]
+            endpoints.append(parent)
+    with TestClient(create_app(settings, lichess_transport=lichess_mock.fail_on_request("offline"),
+                              trainer_runtime=runtime, candidate_evaluator=EvidenceEvaluator())) as client:
+        client.post("/trainer/consent", json={"accepted": True})
+        attempt = client.post(URL, data={"base_ply": "0", "message": "Compare transpositions",
+                                         "stream": "true"}).json()
+        assert runtime.ready.wait(5)
+        try:
+            positions = []
+            for node_id in endpoints:
+                result = call(client, runtime.token, "evaluate_position", {
+                    "attempt_id": attempt["id"],
+                    "position": {"kind": "variation", "node_id": node_id},
+                })
+                assert not result["isError"]
+                positions.append(result["structuredContent"])
+            assert positions[0]["position"] == positions[1]["position"]
+            assert [position["context"] for position in positions] == [
+                {"position": "Variation · Position after 2... Nc6", "line": "1. Nf3 1... Nf6 2. Nc3 2... Nc6"},
+                {"position": "Variation · Position after 2... Nf6", "line": "1. Nc3 1... Nc6 2. Nf3 2... Nf6"},
+            ]
+        finally:
+            runtime.release.set()
+        output = events(client, attempt["eventsUrl"] + "?render=true")
+        first = next(event for event in output if event["type"] == "evidence")
+        assert "Line: 1. Nf3 1... Nf6 2. Nc3 2... Nc6" in first["html"]
+        assert "Line: 1. Nc3 1... Nc6 2. Nf3 2... Nf6" not in first["html"]
+        final = client.get(URL + "/0/fragment").text
+        assert "Line: 1. Nf3 1... Nf6 2. Nc3 2... Nc6" in final
+        assert "Line: 1. Nc3 1... Nc6 2. Nf3 2... Nf6" in final
+    with TestClient(create_app(settings, lichess_transport=lichess_mock.fail_on_request("offline"))) as client:
+        assert client.get(URL + "/0/fragment").text == final
