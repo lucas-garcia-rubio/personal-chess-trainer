@@ -420,6 +420,15 @@
       const discussionContent = document.querySelector("[data-discussion-content]");
       const deleteDiscussionButton = document.querySelector('[data-action="delete-discussion"]');
       const discussionError = document.querySelector("[data-discussion-error]");
+      const discussionErrors = new Map();
+      function reportDiscussionError(basePly, message, attemptId = null) {
+        if (attemptId !== null && responseCursors.get(basePly)?.attemptId !== attemptId) return;
+        discussionErrors.set(basePly, message);
+        if (gameIndex === basePly) {
+          discussionError.textContent = message;
+          discussionError.hidden = false;
+        }
+      }
       const trainerForm = document.querySelector(".trainer-form");
       const composer = trainerForm.querySelector("textarea");
       const consent = document.querySelector("#trainer-consent");
@@ -447,7 +456,7 @@
         const attempt = runningAttempt(discussion);
         if (attempt) responseCursors.set(Number(basePly), { attemptId: attempt.id, cursor: attempt.events.at(-1)?.sequence || 0 });
       }
-      let fragmentQueue = Promise.resolve();
+      const fragmentRequests = new Map();
       let renderedFragmentKey = null;
       // Fragment replacement can temporarily collapse the history. Restore before
       // the browser delivers scroll events for that intermediate layout.
@@ -460,51 +469,60 @@
       }
 
       async function refreshDiscussion(basePly, attemptId = null, cursor = null, html = null) {
-        if (attemptId !== null) responseCursors.set(basePly, { attemptId, cursor });
+        const previous = responseCursors.get(basePly);
+        if (attemptId !== null) {
+          if (previous && (previous.attemptId > attemptId || (previous.attemptId === attemptId && previous.cursor > cursor))) return;
+          responseCursors.set(basePly, { attemptId, cursor });
+        }
         const processed = responseCursors.get(basePly);
         const query = processed ? `?attempt_id=${processed.attemptId}&cursor=${processed.cursor}` : "";
         const key = `${basePly}${query}`;
-        fragmentQueue = fragmentQueue.catch(() => {}).then(async () => {
-          if (gameIndex !== basePly) return;
-          readingPosition();
-          const previousFragment = discussionContent.querySelector('[data-discussion-fragment]');
-          const expandedEvaluations = new Set(
-            Number(previousFragment?.dataset.basePly) === basePly
-              ? [...discussionContent.querySelectorAll('[data-evaluation-disclosure][open]')]
-                  .map(details => details.dataset.evaluationDisclosure)
-              : []
-          );
-          if (html !== null) {
-            rememberDiscussionReading();
-            htmx.swap(discussionContent, html, { swapStyle: "innerHTML", settleDelay: 0 });
-          } else {
-            await htmx.ajax("GET", `${trainerForm.action}/${basePly}/fragment${query}`, {
-              target: discussionContent, swap: "innerHTML",
-            });
+        // Load off-screen. A slow origin request must neither block nor swap into
+        // another Discussion, and a later cursor supersedes any in-flight snapshot.
+        if (html === null) {
+          if (!fragmentRequests.has(key)) {
+            fragmentRequests.set(key, (async () => {
+              const response = await fetch(`${trainerForm.action}/${basePly}/fragment${query}`);
+              if (!response.ok) throw new Error("Could not reload the Discussion.");
+              return response.text();
+            })());
           }
-          if (gameIndex !== basePly) {
-            discussionContent.hidden = true;
-            renderedFragmentKey = null;
-            renderDiscussion();
-            return;
+          const request = fragmentRequests.get(key);
+          try { html = await request; }
+          catch (error) {
+            if (responseCursors.get(basePly) !== processed) return;
+            throw error;
           }
-          for (const details of discussionContent.querySelectorAll('[data-evaluation-disclosure]')) {
-            details.open = expandedEvaluations.has(details.dataset.evaluationDisclosure);
-          }
-          restoreDiscussionReading();
-          const data = discussionContent.querySelector("[data-discussion-board]");
-          if (!data) throw new Error("Could not reload the Discussion.");
-          trainerData.discussions[String(basePly)] = JSON.parse(data.textContent);
-          renderedFragmentKey = key;
-          if (gameIndex === basePly) {
-            const discussion = trainerData.discussions[String(basePly)];
-            if (boardSelection().following && attemptId !== null && cursor > 0 && discussion.attempts.at(-1)?.events.at(-1)?.type === "move") {
-              showDiscussion();
-            } else if (navigationMode === "discussion" && !bestLinePreview) showDiscussion();
-            else showPosition(currentIndex);
-          }
-        });
-        return fragmentQueue;
+          finally { if (fragmentRequests.get(key) === request) fragmentRequests.delete(key); }
+        }
+        if (responseCursors.get(basePly) !== processed) return;
+        const snapshot = new DOMParser().parseFromString(html, "text/html");
+        const data = snapshot.querySelector("[data-discussion-board]");
+        if (!data) throw new Error("Could not reload the Discussion.");
+        trainerData.discussions[String(basePly)] = JSON.parse(data.textContent);
+        discussionErrors.delete(basePly);
+        if (gameIndex !== basePly) return;
+        readingPosition();
+        const previousFragment = discussionContent.querySelector('[data-discussion-fragment]');
+        const expandedEvaluations = new Set(
+          Number(previousFragment?.dataset.basePly) === basePly
+            ? [...discussionContent.querySelectorAll('[data-evaluation-disclosure][open]')]
+                .map(details => details.dataset.evaluationDisclosure)
+            : []
+        );
+        rememberDiscussionReading();
+        htmx.swap(discussionContent, html, { swapStyle: "innerHTML", settleDelay: 0 });
+        discussionContent.hidden = false;
+        for (const details of discussionContent.querySelectorAll('[data-evaluation-disclosure]')) {
+          details.open = expandedEvaluations.has(details.dataset.evaluationDisclosure);
+        }
+        restoreDiscussionReading();
+        renderedFragmentKey = key;
+        const discussion = trainerData.discussions[String(basePly)];
+        if (boardSelection().following && attemptId !== null && cursor > 0 && discussion.attempts.at(-1)?.events.at(-1)?.type === "move") {
+          showDiscussion();
+        } else if (navigationMode === "discussion" && !bestLinePreview) showDiscussion();
+        else showPosition(currentIndex);
       }
 
       function followResponse(basePly, attempt) {
@@ -514,11 +532,15 @@
         const source = new EventSource(`${trainerForm.action}/${basePly}/attempts/${attempt.id}/events?after=${after}&render=true`);
         responseStreams.set(attempt.id, source);
         let updates = Promise.resolve();
+        let lastSequence = after;
         source.onmessage = (event) => {
+          if (responseStreams.get(attempt.id) !== source || responseCursors.get(basePly)?.attemptId > attempt.id) return;
           const visible = JSON.parse(event.data);
+          if (visible.sequence <= lastSequence) return;
+          lastSequence = visible.sequence;
+          discussionErrors.delete(basePly);
           updates = updates.then(() => refreshDiscussion(basePly, attempt.id, visible.sequence, visible.html)).catch((error) => {
-            discussionError.textContent = error.message;
-            discussionError.hidden = false;
+            reportDiscussionError(basePly, error.message, attempt.id);
           });
           if (["completed", "interrupted", "failed", "limited"].includes(visible.type)) {
             source.close();
@@ -526,8 +548,9 @@
           }
         };
         source.onerror = () => {
-          discussionError.textContent = "Reconnecting to the saved Trainer response…";
-          discussionError.hidden = false;
+          if (responseStreams.get(attempt.id) === source && responseCursors.get(basePly)?.attemptId === attempt.id) {
+            reportDiscussionError(basePly, "Reconnecting to the saved Trainer response…", attempt.id);
+          }
         };
       }
 
@@ -542,6 +565,7 @@
             || {{ (not trainer_availability.is_available) | tojson }}) return;
         const submittedRevision = draftRevision;
         pendingSends.add(basePly);
+        discussionErrors.delete(basePly);
         const body = new URLSearchParams(new FormData(trainerForm));
         body.set("position", JSON.stringify(displayedPositionReference()));
         body.set("revision", JSON.stringify(trainerData.discussions[String(basePly)]?.revision ?? null));
@@ -552,15 +576,16 @@
           const response = await fetch(trainerForm.action, { method: "POST", body });
           if (!response.ok) throw new Error((await response.json()).detail || "Trainer request failed.");
           const attempt = await response.json();
-          if (draftRevision === submittedRevision) composer.value = "";
-          bestLinePreview = null;
-          previewPanel.hidden = true;
+          if (gameIndex === basePly) {
+            if (draftRevision === submittedRevision) composer.value = "";
+            bestLinePreview = null;
+            previewPanel.hidden = true;
+          }
           await refreshDiscussion(basePly, attempt.id, 0);
           if (gameIndex === basePly) showDiscussion();
           followResponse(basePly, attempt);
         } catch (error) {
-          discussionError.textContent = error.message;
-          discussionError.hidden = false;
+          reportDiscussionError(basePly, error.message);
         } finally {
           pendingSends.delete(basePly);
           renderDiscussion();
@@ -581,8 +606,7 @@
             followResponse(basePly, result);
           }
         } catch (error) {
-          discussionError.textContent = error.message;
-          discussionError.hidden = false;
+          reportDiscussionError(basePly, error.message, attempt.id);
         }
       }
       interruptButton.addEventListener("click", () => responseAction("interrupt"));
@@ -735,8 +759,7 @@
             if (gameIndex === basePly) showDiscussion();
           }
         } catch (error) {
-          discussionError.textContent = error.message;
-          discussionError.hidden = false;
+          reportDiscussionError(basePly, error.message);
         } finally {
           discussionMutationPending = false;
           showPosition(currentIndex);
@@ -825,6 +848,8 @@
       }
 
       function renderDiscussion() {
+        discussionError.textContent = discussionErrors.get(gameIndex) || "";
+        discussionError.hidden = !discussionErrors.has(gameIndex);
         const discussion = trainerData.discussions[String(gameIndex)];
         const running = runningAttempt(discussion);
         const lastAttempt = discussion?.attempts?.at(-1);
@@ -854,12 +879,15 @@
           latestResponseButton.hidden = true;
           return;
         }
-        discussionContent.hidden = false;
+        const fragment = discussionContent.querySelector('[data-discussion-fragment]');
+        discussionContent.hidden = Number(fragment?.dataset.basePly) !== gameIndex;
+        if (discussionContent.hidden) latestResponseButton.hidden = true;
         const processed = responseCursors.get(gameIndex);
         const key = `${gameIndex}${processed ? `?attempt_id=${processed.attemptId}&cursor=${processed.cursor}` : ""}`;
         if (renderedFragmentKey !== key) {
           renderedFragmentKey = key;
-          refreshDiscussion(gameIndex).catch((error) => { discussionError.textContent = error.message; discussionError.hidden = false; });
+          const basePly = gameIndex;
+          refreshDiscussion(basePly).catch((error) => { reportDiscussionError(basePly, error.message); });
         }
         for (const branch of discussionContent.querySelectorAll("[data-node-id]")) {
           branch.disabled = discussionMutationPending;
@@ -980,11 +1008,10 @@
           boardSelections.delete(basePly);
           responseCursors.delete(basePly);
           renderedFragmentKey = null;
-          showDiscussion();
+          if (gameIndex === basePly) showDiscussion();
           return true;
         } catch (error) {
-          discussionError.textContent = error.message;
-          discussionError.hidden = false;
+          reportDiscussionError(basePly, error.message);
           return false;
         } finally {
           discussionMutationPending = false;
@@ -1013,20 +1040,22 @@
           });
           const attempt = await response.json();
           if (!response.ok) throw new Error(attempt.detail || "Practical Line unavailable.");
-          bestLinePreview = null;
-          previewPanel.hidden = true;
-          exploredMoves = [];
+          if (gameIndex === basePly) {
+            bestLinePreview = null;
+            previewPanel.hidden = true;
+            exploredMoves = [];
+          }
           await refreshDiscussion(basePly, attempt.id, 0);
           if (gameIndex === basePly) showDiscussion();
           followResponse(basePly, attempt);
         } catch (error) {
-          discussionError.textContent = error.message;
-          discussionError.hidden = false;
+          reportDiscussionError(basePly, error.message);
         } finally {
           renderDiscussion();
         }
       });
       bestLineButton.addEventListener("click", async () => {
+        const basePly = gameIndex;
         bestLineButton.disabled = true;
         previewError.hidden = true;
         try {
@@ -1034,9 +1063,10 @@
           const response = await fetch(bestLineButton.dataset.url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ply: gameIndex, position }),
+            body: JSON.stringify({ ply: basePly, position }),
           });
           const result = await response.json();
+          if (gameIndex !== basePly) return;
           if (!response.ok) throw new Error(result.detail || "Best Line unavailable.");
           bestLinePreview = result;
           inspectBoard();
@@ -1054,6 +1084,7 @@
           returnToGameButton.hidden = false;
           showPosition(0);
         } catch (error) {
+          if (gameIndex !== basePly) return;
           previewError.textContent = error.message;
           previewError.hidden = false;
           previewError.closest("details").open = true;

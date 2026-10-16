@@ -65,5 +65,17 @@ It also checks that reading history does not suspend board following and that
 returning to recent content does not resume a manually paused board. Long responses
 stay in the history's scroll flow, with the board and composer visible.
 
-Background Discussion isolation has a separate owner in the spec 32 verification
-plan.
+`test_switch.py` owns background Discussion isolation. Its controlled runtime and
+public MCP tools demonstrate moves and consult the Evaluator while the Player
+opens another Base Position or Critical Moment. The browser checks independent
+content, board, composer context and draft, preservation of the inspected origin
+Position, explicit following on return, and completion, failure and interruption
+with retry. Delayed fragment delivery checks that an origin request cannot block
+or overwrite the destination. Captured public EventSource callbacks exercise
+late disconnects and stale replay after completion or a new attempt.
+
+`tests/test_discussion_isolation.py` owns durable isolation: concurrent Discussions,
+origin-bound moves and evidence, completion/interruption/failure, independent retry,
+cursor-bounded reconnection/replay without duplicate entries, and exact recovery
+of both Discussion documents after application restart. These contracts use public
+HTTP routes and Trainer tools, with no database introspection or external model.
