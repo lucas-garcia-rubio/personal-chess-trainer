@@ -324,6 +324,7 @@
               </div>
             </div>
             <div class="trainer-footer">
+              <button type="button" data-action="latest-response" hidden>Ir para a resposta mais recente</button>
               <details class="trainer-settings"{% if not trainer_consent %} open{% endif %}>
                 <summary>Trainer settings and consent</summary>
                 <div>
@@ -373,6 +374,49 @@
       const panels = [...document.querySelectorAll('[role="tabpanel"]')];
       const discussionHistory = document.querySelector("[data-discussion-history]");
       const tabScrollPositions = new Map();
+      const latestResponseButton = document.querySelector('[data-action="latest-response"]');
+      const discussionReading = new Map();
+      let restoredDiscussionTop = 0;
+      let discussionViewportHeight = 0;
+
+      function readingPosition() {
+        if (!discussionReading.has(gameIndex)) {
+          discussionReading.set(gameIndex, { following: true, top: 0 });
+        }
+        return discussionReading.get(gameIndex);
+      }
+
+      function restoreDiscussionReading() {
+        if (!discussionHistory.clientHeight) return;
+        const fragment = discussionContent.querySelector('[data-discussion-fragment]');
+        if (Number(fragment?.dataset.basePly) !== gameIndex) return;
+        const reading = readingPosition();
+        latestResponseButton.hidden = reading.following || discussionContent.hidden;
+        discussionHistory.scrollTop = reading.following ? discussionHistory.scrollHeight : reading.top;
+        restoredDiscussionTop = discussionHistory.scrollTop;
+        discussionViewportHeight = discussionHistory.clientHeight;
+      }
+
+      function rememberDiscussionReading() {
+        if (!discussionHistory.clientHeight) return;
+        const fragment = discussionContent.querySelector('[data-discussion-fragment]');
+        if (Number(fragment?.dataset.basePly) !== gameIndex) return;
+        // Layout changes and our own restoration are not a decision to follow.
+        if (discussionHistory.clientHeight !== discussionViewportHeight) {
+          restoreDiscussionReading();
+          return;
+        }
+        if (discussionHistory.scrollTop === restoredDiscussionTop) return;
+        const reading = readingPosition();
+        reading.top = discussionHistory.scrollTop;
+        reading.following = discussionHistory.scrollHeight - discussionHistory.clientHeight - reading.top <= 2;
+        restoreDiscussionReading();
+      }
+      discussionHistory.addEventListener("scroll", rememberDiscussionReading);
+      latestResponseButton.addEventListener("click", () => {
+        readingPosition().following = true;
+        restoreDiscussionReading();
+      });
       const discussionContent = document.querySelector("[data-discussion-content]");
       const deleteDiscussionButton = document.querySelector('[data-action="delete-discussion"]');
       const discussionError = document.querySelector("[data-discussion-error]");
@@ -405,6 +449,11 @@
       }
       let fragmentQueue = Promise.resolve();
       let renderedFragmentKey = null;
+      // Fragment replacement can temporarily collapse the history. Restore before
+      // the browser delivers scroll events for that intermediate layout.
+      discussionContent.addEventListener("htmx:beforeSwap", rememberDiscussionReading);
+      discussionContent.addEventListener("htmx:afterSwap", restoreDiscussionReading);
+      new ResizeObserver(restoreDiscussionReading).observe(discussionHistory);
 
       function runningAttempt(discussion) {
         return discussion?.attempts?.find((attempt) => attempt.status === "running");
@@ -417,6 +466,7 @@
         const key = `${basePly}${query}`;
         fragmentQueue = fragmentQueue.catch(() => {}).then(async () => {
           if (gameIndex !== basePly) return;
+          readingPosition();
           const previousFragment = discussionContent.querySelector('[data-discussion-fragment]');
           const expandedEvaluations = new Set(
             Number(previousFragment?.dataset.basePly) === basePly
@@ -425,6 +475,7 @@
               : []
           );
           if (html !== null) {
+            rememberDiscussionReading();
             htmx.swap(discussionContent, html, { swapStyle: "innerHTML", settleDelay: 0 });
           } else {
             await htmx.ajax("GET", `${trainerForm.action}/${basePly}/fragment${query}`, {
@@ -440,6 +491,7 @@
           for (const details of discussionContent.querySelectorAll('[data-evaluation-disclosure]')) {
             details.open = expandedEvaluations.has(details.dataset.evaluationDisclosure);
           }
+          restoreDiscussionReading();
           const data = discussionContent.querySelector("[data-discussion-board]");
           if (!data) throw new Error("Could not reload the Discussion.");
           trainerData.discussions[String(basePly)] = JSON.parse(data.textContent);
@@ -799,6 +851,7 @@
         trainerForm.hidden = false;
         if (!discussion) {
           discussionContent.hidden = true;
+          latestResponseButton.hidden = true;
           return;
         }
         discussionContent.hidden = false;
@@ -842,6 +895,7 @@
           if (selected) {
             const scroller = name === "trainer" ? discussionHistory : panels[index];
             scroller.scrollTop = tabScrollPositions.get(name) || 0;
+            if (name === "trainer") restoreDiscussionReading();
           }
         }
       }
