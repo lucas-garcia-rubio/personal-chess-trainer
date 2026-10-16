@@ -4,6 +4,7 @@ import socket
 from threading import Thread
 import time
 
+from fastapi import FastAPI
 import httpx
 import pytest
 import uvicorn
@@ -28,9 +29,14 @@ def desktop_runtime() -> FakeOpenCode:
 
 
 @pytest.fixture
+def browser_test_routes() -> Callable[[FastAPI], None]:
+    return lambda app: None
+
+
+@pytest.fixture
 def desktop_app(
     migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock,
-    desktop_runtime: FakeOpenCode,
+    desktop_runtime: FakeOpenCode, browser_test_routes: Callable[[FastAPI], None],
 ) -> Iterator[str]:
     """Real HTTP server, isolated DB, controlled external services, ephemeral port."""
     app = create_app(
@@ -38,6 +44,7 @@ def desktop_app(
         lichess_transport=lichess_mock.games_for("Lance5500"),
         trainer_runtime=desktop_runtime,
     )
+    browser_test_routes(app)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         url = f"http://127.0.0.1:{listener.getsockname()[1]}"

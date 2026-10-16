@@ -335,6 +335,7 @@
                 </div>
               </details>
               <div class="trainer-actions">
+                <button type="button" data-action="follow-trainer" hidden>Acompanhar Trainer</button>
                 <button type="button" data-action="delete-discussion" hidden>Delete Discussion</button>
                 <button type="button" data-action="interrupt-response" hidden>Interrupt response</button>
                 <button type="button" data-action="retry-response" hidden>Tentar novamente</button>
@@ -344,6 +345,7 @@
                 <input type="hidden" name="base_ply" value="0">
                 <input type="hidden" name="initial_moves" value="[]">
                 <label for="trainer-message">Discuss this Position</label>
+                <span data-position-context aria-live="polite"></span>
                 <textarea id="trainer-message" name="message" required{% if not trainer_availability.is_available %} disabled{% endif %}></textarea>
                 <button type="submit"{% if not trainer_availability.is_available %} disabled{% endif %}>Send to Trainer</button>
               </form>
@@ -377,6 +379,10 @@
       const trainerForm = document.querySelector(".trainer-form");
       const interruptButton = document.querySelector('[data-action="interrupt-response"]');
       const retryButton = document.querySelector('[data-action="retry-response"]');
+      const followTrainerButton = document.querySelector('[data-action="follow-trainer"]');
+      const positionContext = document.querySelector('[data-position-context]');
+      // Reading a Variation never changes the selection owned by the running Trainer.
+      const boardSelections = new Map();
       const responseStreams = new Map();
       const responseCursors = new Map();
       for (const [basePly, discussion] of Object.entries(trainerData.discussions)) {
@@ -426,14 +432,10 @@
           renderedFragmentKey = key;
           if (gameIndex === basePly) {
             const discussion = trainerData.discussions[String(basePly)];
-            if (attemptId !== null && cursor > 0 && discussion.attempts.at(-1)?.events.at(-1)?.type === "move") {
-              navigationMode = "discussion";
-              bestLinePreview = null;
-              previewPanel.hidden = true;
-              gameModeButton.setAttribute("aria-pressed", "false");
-              discussionModeButton.setAttribute("aria-pressed", "true");
-              showPosition(discussion.moves.length);
-            } else showPosition(currentIndex);
+            if (boardSelection().following && attemptId !== null && cursor > 0 && discussion.attempts.at(-1)?.events.at(-1)?.type === "move") {
+              showDiscussion();
+            } else if (navigationMode === "discussion" && !bestLinePreview) showDiscussion();
+            else showPosition(currentIndex);
           }
         });
         return fragmentQueue;
@@ -562,7 +564,24 @@
       }
 
       function displayedNodeId(discussion) {
-        return currentIndex === 0 ? null : discussionPath(discussion, discussion.activeNodeId)[currentIndex - 1].id;
+        return currentIndex === 0 ? null : displayedPath(discussion)[currentIndex - 1].id;
+      }
+
+      function boardSelection() {
+        if (!boardSelections.has(gameIndex)) boardSelections.set(gameIndex, { following: true, tipId: null, nodeId: null });
+        return boardSelections.get(gameIndex);
+      }
+
+      function displayedPath(discussion) {
+        const selection = boardSelection();
+        return discussionPath(discussion, selection.following ? discussion.activeNodeId : selection.tipId);
+      }
+
+      function inspectBoard() {
+        const selection = boardSelection();
+        const discussion = trainerData.discussions[String(gameIndex)];
+        if (selection.following && discussion) selection.tipId = discussion.activeNodeId;
+        selection.following = false;
       }
 
       function legalDests(game) {
@@ -633,12 +652,14 @@
             responseCursors.delete(basePly);
             renderedFragmentKey = null;
             delete trainerData.discussions[String(basePly)];
+            boardSelections.delete(basePly);
             if (gameIndex === basePly) showGamePosition(basePly);
           } else {
             responseCursors.delete(basePly);
             renderedFragmentKey = null;
             const result = await response.json();
             trainerData.discussions[String(basePly)] = result;
+            boardSelections.delete(basePly);
             if (gameIndex === basePly) showDiscussion();
           }
         } catch (error) {
@@ -683,9 +704,10 @@
         const positions = bestLinePreview
           ? [{ fen: bestLinePreview.startingFen, lastMove: null }, ...bestLinePreview.moves.map((move) => ({ fen: move.fen, lastMove: move.uci }))]
           : navigationMode === "discussion" && discussion
-            ? [{ fen: discussion.baseFen, lastMove: null }, ...discussion.moves.map((move) => ({ fen: move.fen, lastMove: move.uci }))]
+            ? [{ fen: discussion.baseFen, lastMove: null }, ...displayedPath(discussion).map((move) => ({ fen: move.fen, lastMove: move.uci }))]
             : navigation.positions;
         currentIndex = Math.max(0, Math.min(index, positions.length - 1));
+        if (!bestLinePreview && navigationMode === "discussion" && discussion) boardSelection().nodeId = displayedNodeId(discussion);
         adoptPreviewButton.disabled = currentIndex === 0 || discussionMutationPending || Boolean(runningAttempt(discussion));
         if (!bestLinePreview && navigationMode === "game") gameIndex = currentIndex;
         const position = positions[currentIndex];
@@ -734,6 +756,19 @@
         const discussion = trainerData.discussions[String(gameIndex)];
         const running = runningAttempt(discussion);
         const lastAttempt = discussion?.attempts?.at(-1);
+        followTrainerButton.hidden = !discussion || boardSelection().following;
+        let context = "Discutindo a Base Position";
+        if (navigationMode === "discussion" && discussion && !bestLinePreview) {
+          const path = displayedPath(discussion);
+          const node = path[currentIndex - 1];
+          if (node) {
+            const parentFen = currentIndex > 1 ? path[currentIndex - 2].fen : discussion.baseFen;
+            const fields = parentFen.split(" ");
+            context = `Discutindo a posição após ${fields[5]}${fields[1] === "w" ? "." : "..."} ${node.san}`;
+          }
+        } else if (bestLinePreview) context = `Discutindo Best Line preview · ${currentIndex}`;
+        else if (gameIndex) context = `Discutindo a Position da Game · ply ${gameIndex}`;
+        positionContext.textContent = context;
         interruptButton.hidden = !running;
         retryButton.hidden = !lastAttempt || !["failed", "interrupted", "limited"].includes(lastAttempt.status);
         trainerForm.querySelector('[type="submit"]').disabled = Boolean(running) || {{ (not trainer_availability.is_available) | tojson }};
@@ -753,27 +788,24 @@
           renderedFragmentKey = key;
           refreshDiscussion(gameIndex).catch((error) => { discussionError.textContent = error.message; discussionError.hidden = false; });
         }
-        for (const branch of discussionContent.querySelectorAll("[data-node-id]")) branch.disabled = discussionMutationPending;
+        for (const branch of discussionContent.querySelectorAll("[data-node-id]")) {
+          branch.disabled = discussionMutationPending;
+          const nodeId = branch.dataset.nodeId ? Number(branch.dataset.nodeId) : null;
+          branch.setAttribute("aria-pressed", String(!bestLinePreview && navigationMode === "discussion" && nodeId === boardSelection().nodeId));
+        }
       }
 
-      discussionContent.addEventListener("click", async (event) => {
+      discussionContent.addEventListener("click", (event) => {
           const branch = event.target.closest("[data-node-id]");
           if (!branch || discussionMutationPending) return;
-          const discussion = trainerData.discussions[String(gameIndex)];
           const nodeId = branch.dataset.nodeId ? Number(branch.dataset.nodeId) : null;
-          const node = discussion.nodes.find((item) => item.id === nodeId);
-          const running = runningAttempt(discussion);
-            showDiscussion();
-            if (running) {
-              // Local selection is read-only: never change the authoritative active node.
-              const path = discussionPath(discussion, nodeId);
-              const selected = node || { fen: discussion.baseFen };
-              chess = new Chess(selected.fen);
-              ground.set({ fen: selected.fen, movable: movableConfig() });
-              status.value = `Discussion · read-only · ${path.map((move) => move.san).join(" ") || "Base Position"}`;
-              return;
-            }
-            await mutateDiscussion("/selection", "POST", { revision: discussion.revision, nodeId });
+          inspectBoard();
+          Object.assign(boardSelection(), { tipId: nodeId, nodeId });
+          showDiscussion();
+      });
+      followTrainerButton.addEventListener("click", () => {
+        boardSelection().following = true;
+        showDiscussion();
       });
 
       function selectTab(name) {
@@ -794,7 +826,8 @@
         }
       }
 
-      function showGamePosition(index) {
+      function showGamePosition(index, manual = true) {
+        if (manual) inspectBoard();
         bestLinePreview = null;
         navigationMode = "game";
         gameModeButton.setAttribute("aria-pressed", "true");
@@ -813,7 +846,9 @@
         discussionModeButton.setAttribute("aria-pressed", "true");
         previewPanel.hidden = true;
         returnToGameButton.hidden = true;
-        showPosition(discussion.moves.length);
+        const path = displayedPath(discussion);
+        const selection = boardSelection();
+        showPosition(selection.following ? path.length : path.findIndex((node) => node.id === selection.nodeId) + 1);
       }
 
       function renderEvaluationCurve() {
@@ -853,8 +888,8 @@
         }
       }
 
-      previous.addEventListener("click", () => showPosition(currentIndex - 1));
-      next.addEventListener("click", () => showPosition(currentIndex + 1));
+      previous.addEventListener("click", () => { inspectBoard(); showPosition(currentIndex - 1); });
+      next.addEventListener("click", () => { inspectBoard(); showPosition(currentIndex + 1); });
       async function adoptPreview(uci = null) {
         if (!bestLinePreview || discussionMutationPending || runningAttempt(trainerData.discussions[String(gameIndex)])) return false;
         const basePly = gameIndex;
@@ -868,6 +903,7 @@
           const result = await response.json();
           if (!response.ok) throw new Error(result.detail || "Preview could not be adopted.");
           trainerData.discussions[String(basePly)] = result;
+          boardSelections.delete(basePly);
           responseCursors.delete(basePly);
           renderedFragmentKey = null;
           showDiscussion();
@@ -929,6 +965,7 @@
           const result = await response.json();
           if (!response.ok) throw new Error(result.detail || "Best Line unavailable.");
           bestLinePreview = result;
+          inspectBoard();
           previewPanel.querySelector("[data-preview-score]").textContent =
             `Player score: ${result.score.kind} ${result.score.value}`;
           previewPanel.querySelector("[data-preview-moves]").textContent =
@@ -968,7 +1005,7 @@
       tabs[1].addEventListener("click", () => selectTab("trainer"));
       renderEvaluationCurve();
       const query = new URLSearchParams(window.location.search);
-      showGamePosition(Number(query.get("ply") || 0));
+      showGamePosition(Number(query.get("ply") || 0), false);
       selectTab(query.has("trainer") ? "trainer" : "analysis");
       if (query.has("trainer") && trainerData.discussions[String(gameIndex)]) showDiscussion();
       for (const [basePly, discussion] of Object.entries(trainerData.discussions)) {

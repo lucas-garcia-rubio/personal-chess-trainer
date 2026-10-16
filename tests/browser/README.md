@@ -43,3 +43,11 @@ Trainer response, readable Position/line references, verified and unavailable
 results, and secondary technical details. It releases a controlled response
 while the Player has evaluations open to verify that streaming preserves their
 expansion. Reloading starts collapsed again and retains the consultation content.
+
+`test_follow.py` controls a demonstration through the public Trainer tools while
+a real browser inspects earlier moves, steps backward and forward, opens the Base
+Position and returns to the Game. It checks explicit resumption, preserved reading
+position, absence of selection writes during inspection, and the Position actually
+received by the Trainer on the next send. `tests/test_inspected_position.py` also
+checks that next-send contract over HTTP, including unchanged Game, Analysis, Base
+Position, Variation nodes and prior Discussion messages.
