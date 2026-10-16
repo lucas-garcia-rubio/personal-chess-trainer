@@ -322,7 +322,6 @@ def create_web_app(
                 ),
                 "best_line_url": f"/analyses/{origin}/{origin_id}/best-line",
                 "trainer_availability": trainer_availability,
-                "trainer_consent": storage.trainer_consent(),
             },
         )
 
@@ -334,11 +333,6 @@ def create_web_app(
     async def create_discussion(
         request: Request, origin: str, origin_id: str
     ) -> Response:
-        if trainer_availability.is_available and not storage.trainer_consent():
-            raise HTTPException(
-                status_code=403,
-                detail="Trainer consent is required before sending data to OpenCode.",
-            )
         fields = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
         attempt = None
         try:
@@ -467,8 +461,6 @@ def create_web_app(
     @app.post("/analyses/{origin}/{origin_id}/discussions/{base_ply}/attempts/{attempt_id}/retry")
     def retry_response(origin: str, origin_id: str, base_ply: int, attempt_id: int) -> Response:
         find_attempt(origin, origin_id, base_ply, attempt_id)
-        if not storage.trainer_consent():
-            raise HTTPException(status_code=403, detail="Trainer consent is required.")
         if not trainer_availability.is_available:
             raise HTTPException(status_code=503, detail="Trainer unavailable.")
         try:
@@ -481,8 +473,6 @@ def create_web_app(
 
     @app.post("/analyses/{origin}/{origin_id}/practical-line")
     def practical_line(origin: str, origin_id: str, selection: _PracticalLineRequest) -> Response:
-        if not storage.trainer_consent():
-            raise HTTPException(status_code=403, detail="Trainer consent is required.")
         if not trainer_availability.is_available:
             raise HTTPException(status_code=503, detail="Trainer unavailable.")
         position = selection.position or PositionArguments(kind="game", ply=selection.ply)

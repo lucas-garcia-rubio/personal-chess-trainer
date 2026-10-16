@@ -59,7 +59,6 @@ def desktop_app(
                 time.sleep(0.01)
             with httpx.Client(base_url=url, timeout=30, follow_redirects=True) as client:
                 client.post("/sync").raise_for_status()
-                client.post("/trainer/consent", json={"accepted": True}).raise_for_status()
                 client.post("/analyses/lichess/q7ZvsdUF/discussions", data={
                     "base_ply": "0", "message": "Explain this position at length.",
                     "initial_moves": '["e2e4", "e7e5", "g1f3"]',

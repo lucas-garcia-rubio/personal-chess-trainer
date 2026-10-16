@@ -50,34 +50,32 @@ class FakeOpenCode:
         return '<script>alert("hostile")</script><img src=x onerror=alert(1)>Consider Nf3 & development.'
 
 
-def test_consent_is_informed_persistent_and_revocable(
+def test_trainer_has_no_consent_settings_and_sends_without_opt_in(
     migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock
 ) -> None:
     settings = migrated_settings("Lance5500")
-    runtime = FakeTrainerRuntime(TrainerRuntimeAvailability.available())
+    runtime = FakeOpenCode()
     with TestClient(create_app(
         settings, lichess_transport=lichess_mock.games_for("Lance5500"),
         trainer_runtime=runtime,
     )) as client:
         client.post("/sync")
         page = client.get("/analyses/lichess/q7ZvsdUF")
-        assert "configured provider" in page.text
-        assert "Game moves, Analysis, Variations and Discussion text" in page.text
+        assert "Trainer settings and consent" not in page.text
+        assert "trainer-consent" not in page.text
         assert client.get("/trainer/consent").json() == {"accepted": False}
         assert client.post("/analyses/lichess/q7ZvsdUF/discussions", data={
             "base_ply": "0", "message": "Why?", "initial_moves": "[]",
-        }).status_code == 403
-        assert client.post("/trainer/consent", json={"accepted": True}).status_code == 200
+        }).status_code == 200
 
     with TestClient(create_app(
         settings, lichess_transport=lichess_mock.fail_on_request("offline reopen"),
         trainer_runtime=runtime,
     )) as client:
-        assert client.get("/trainer/consent").json() == {"accepted": True}
-        assert client.post("/trainer/consent", json={"accepted": False}).json() == {"accepted": False}
+        assert client.get("/trainer/consent").json() == {"accepted": False}
         assert client.post("/analyses/lichess/q7ZvsdUF/discussions", data={
             "base_ply": "0", "message": "Why?", "initial_moves": "[]",
-        }).status_code == 403
+        }).status_code == 200
 
 
 def test_first_response_has_full_context_and_survives_restart_safely(
@@ -92,9 +90,7 @@ def test_first_response_has_full_context_and_survives_restart_safely(
     )) as client:
         client.post("/sync")
         fields = {"base_ply": "0", "message": "Explique diretamente", "initial_moves": '["e2e4"]'}
-        assert client.post("/analyses/lichess/q7ZvsdUF/discussions", data=fields).status_code == 403
         assert runtime.requests == []
-        client.post("/trainer/consent", json={"accepted": True})
         response = client.post("/analyses/lichess/q7ZvsdUF/discussions", data=fields)
         assert response.status_code == 200
         data = cast(dict[str, dict[str, object]], _trainer_data(response.text)["discussions"])["0"]
@@ -127,9 +123,6 @@ def test_first_response_has_full_context_and_survives_restart_safely(
         assert len(runtime.requests) == 2
         assert runtime.sessions_created == 1
         assert runtime.requests[1].url.path == "/session-first"
-        client.post("/trainer/consent", json={"accepted": False})
-        assert client.post("/analyses/lichess/q7ZvsdUF/discussions", data=fields).status_code == 403
-        assert len(runtime.requests) == 2
 
 
 def test_production_http_exchange_only_persists_visible_assistant_text(
@@ -184,9 +177,7 @@ def test_production_http_exchange_only_persists_visible_assistant_text(
     )) as client:
         client.post("/sync")
         fields = {"base_ply": "0", "message": "What now?", "initial_moves": "[]"}
-        assert client.post("/analyses/lichess/q7ZvsdUF/discussions", data=fields).status_code == 403
         assert requests == []
-        client.post("/trainer/consent", json={"accepted": True})
         page = client.post("/analyses/lichess/q7ZvsdUF/discussions", data=fields)
         assert page.status_code == 200
         assert len(requests) == 2

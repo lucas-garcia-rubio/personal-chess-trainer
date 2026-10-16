@@ -37,8 +37,8 @@ assertion output includes geometry on visibility failures.
 The composer contract uses a gated stream to check Enter, Shift+Enter and IME
 composition, editing while a send is pending or a response is streaming, focus
 preservation, and explicit sending after completion or interruption. It also
-checks keyboard access to consent settings and revocation through the public HTTP
-routes. Run it alone with `RUN_BROWSER_TESTS=1 python -m pytest
+checks that consent settings are absent and sending works without opting in.
+Run it alone with `RUN_BROWSER_TESTS=1 python -m pytest
 tests/browser/test_composer.py -q`.
 
 `test_evidence.py` checks initially collapsed Evaluator consultations within a

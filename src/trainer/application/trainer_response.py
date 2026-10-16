@@ -130,10 +130,6 @@ class RespondToDiscussion:
             control = ResponseControl()
         if control.cancelled.is_set():
             return
-        if not self._storage.trainer_consent():
-            raise PermissionError(
-                "Trainer consent is required before sending data to OpenCode."
-            )
         context = ReadDiscussionContext(self._storage)(origin, origin_id, base_ply)
         if attempt is not None:
             context["attempt_id"] = attempt.id
@@ -175,9 +171,6 @@ class RespondToDiscussion:
         else:
             assert previous is not None
             context = delta_context(context, previous)
-        # Check again immediately before the provider-bound operation.
-        if not self._storage.trainer_consent():
-            raise PermissionError("Trainer consent has been revoked.")
         # An interrupted/failed dispatch has uncertain runtime state. Rebuild it
         # on the next interaction rather than replaying into an ambiguous session.
         self._storage.set_discussion_session(*key, session)

@@ -168,9 +168,7 @@ def test_practical_line_without_evaluator_demonstrates_unverified_chess_knowledg
                               candidate_evaluator=FailingCandidateEvaluator() if failure == "failed" else None)) as client:
         client.post("/sync")
         assert client.post("/analyses/lichess/q7ZvsdUF/best-line", json={"ply": 0}).status_code == 503
-        assert client.post("/analyses/lichess/q7ZvsdUF/practical-line", json={"ply": 0}).status_code == 403
         assert client.get(URL + "/0").status_code == 404
-        client.post("/trainer/consent", json={"accepted": True})
         attempt = client.post("/analyses/lichess/q7ZvsdUF/practical-line", json={"ply": 0}).json()
         assert runtime.ready.wait(5)
         try:

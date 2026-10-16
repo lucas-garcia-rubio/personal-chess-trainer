@@ -111,7 +111,7 @@ class DiscussionResponses:
 
     def running_key(self, attempt_id: int) -> tuple[str, str, int]:
         key = self._keys[attempt_id]
-        if not self.storage.trainer_consent() or not any(
+        if not any(
             a.id == attempt_id and a.status == "running"
             for a in self.storage.response_attempts(*key)
         ):

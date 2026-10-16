@@ -12,7 +12,7 @@ from trainer.bootstrap import create_app
 from trainer.config import Settings
 
 
-def test_pending_send_and_revoked_consent_cannot_create_requests_or_retries(
+def test_pending_send_cannot_create_requests_or_retries(
     migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock,
 ) -> None:
     ready = Event()
@@ -34,7 +34,6 @@ def test_pending_send_and_revoked_consent_cannot_create_requests_or_retries(
         lichess_transport=lichess_mock.games_for("Lance5500"), trainer_runtime=GatedRuntime(),
     )) as client:
         client.post("/sync")
-        client.post("/trainer/consent", json={"accepted": True})
         attempt = client.post(URL, data={"base_ply": "0", "message": "Explain", "stream": "true"}).json()
         assert ready.wait(5)
         try:
@@ -49,16 +48,6 @@ def test_pending_send_and_revoked_consent_cannot_create_requests_or_retries(
             assert client.get(URL + "/0").json() == before
             assert client.post(attempt_url + "/interrupt").status_code == 200
             assert events(client, attempt["eventsUrl"])[-1]["type"] == "interrupted"
-            stopped = client.get(URL + "/0").json()
-            assert client.post("/trainer/consent", json={"accepted": False}).json() == {"accepted": False}
-            for streaming in ("true", "false"):
-                assert client.post(URL, data={
-                    "base_ply": "0", "message": "Unconsented draft", "stream": streaming,
-                }).status_code == 403
-            assert client.post(attempt_url + "/retry").status_code == 403
-            assert client.get(URL + "/0").json() == stopped
-            client.post("/trainer/consent", json={"accepted": True})
-            assert client.get(URL + "/0").json() == stopped
             explicit = client.post(URL, data={"base_ply": "0", "message": "Explicit draft", "stream": "true"})
             assert explicit.status_code == 202
             assert events(client, explicit.json()["eventsUrl"])[-1]["type"] == "completed"
