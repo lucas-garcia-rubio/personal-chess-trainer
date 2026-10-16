@@ -397,6 +397,13 @@
         const key = `${basePly}${query}`;
         fragmentQueue = fragmentQueue.catch(() => {}).then(async () => {
           if (gameIndex !== basePly) return;
+          const previousFragment = discussionContent.querySelector('[data-discussion-fragment]');
+          const expandedEvaluations = new Set(
+            Number(previousFragment?.dataset.basePly) === basePly
+              ? [...discussionContent.querySelectorAll('[data-evaluation-disclosure][open]')]
+                  .map(details => details.dataset.evaluationDisclosure)
+              : []
+          );
           if (html !== null) {
             htmx.swap(discussionContent, html, { swapStyle: "innerHTML", settleDelay: 0 });
           } else {
@@ -409,6 +416,9 @@
             renderedFragmentKey = null;
             renderDiscussion();
             return;
+          }
+          for (const details of discussionContent.querySelectorAll('[data-evaluation-disclosure]')) {
+            details.open = expandedEvaluations.has(details.dataset.evaluationDisclosure);
           }
           const data = discussionContent.querySelector("[data-discussion-board]");
           if (!data) throw new Error("Could not reload the Discussion.");

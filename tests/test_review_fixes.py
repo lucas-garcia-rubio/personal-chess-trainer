@@ -131,7 +131,9 @@ def test_fragments_replay_text_moves_and_evidence_only_through_processed_cursor(
         assert ">1. e4</button>" in move and ">1... e5</button>" not in move
         assert "Evaluator evidence" not in move and "clear development plan" not in move
         final = client.get(fragment_url + str(output[-1]["sequence"])).text
-        assert final.index("Before demonstration.") < final.index(">1. e4</button>") < final.index(">1... e5</button>") < final.index("Evaluator evidence") < final.index("clear development plan")
+        assert final.index("Before demonstration.") < final.index(">1. e4</button>") < final.index(">1... e5</button>") < final.index("clear development plan")
+        assert final.count("<summary>Ver avaliações</summary>") == 1
+        assert "Verified Evaluator evidence" in final
         rendered = events(client, attempt["eventsUrl"] + "?render=true")
         assert [event["sequence"] for event in rendered if event["type"] != "text"] == [
             event["sequence"] for event in output if event["type"] != "text"]

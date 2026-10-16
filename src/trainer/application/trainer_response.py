@@ -2,6 +2,7 @@ from collections.abc import Iterator
 from dataclasses import asdict
 from html.parser import HTMLParser
 import json
+from typing import cast
 
 from trainer.application.ports import (
     LocalStorage,
@@ -142,7 +143,11 @@ class RespondToDiscussion:
                 "retry_of": attempt.retry_of,
             }
             if self._storage.response_request(attempt.request_id) == PRACTICAL_LINE_REQUEST:
-                evidence = self._evaluations(origin, origin_id, str(context["active_position"]))
+                node_id = cast(int | None, context["active_node_id"])
+                evidence = self._evaluations.evaluate_reference(
+                    origin, origin_id, base_ply, kind="variation" if node_id is not None else "game",
+                    ply=None if node_id is not None else base_ply, node_id=node_id,
+                )
                 evidence["purpose"] = "practical_line"
                 context["practical_line"] = {"evidence": evidence}
                 yield TrainerEvent("evidence", json.dumps(evidence))

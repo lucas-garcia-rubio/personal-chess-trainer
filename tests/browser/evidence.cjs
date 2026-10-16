@@ -1,0 +1,50 @@
+const assert = require('node:assert/strict');
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+(async () => {
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(`${process.argv[2]}/analyses/lichess/q7ZvsdUF?trainer=1`);
+    const response = page.getByRole('region', { name: 'Trainer response', exact: true });
+    await response.waitFor();
+    assert.equal(await response.count(), 1);
+    const toggle = response.getByText('Ver avaliações', { exact: true });
+    const consultations = response.getByRole('article', { name: 'Evaluator consultation', includeHidden: true });
+    assert.equal(await toggle.count(), 1);
+    assert.equal(await consultations.count(), 3);
+    assert.equal(await consultations.first().isVisible(), false);
+    await toggle.click();
+    assert.equal(await consultations.first().isVisible(), true);
+    const first = consultations.nth(0);
+    const second = consultations.nth(1);
+    const third = consultations.nth(2);
+    assert.match(await first.innerText(), /Game · Initial Position/);
+    assert.match(await first.innerText(), /Verified Evaluator evidence/);
+    assert.match(await first.innerText(), /1\. Nh3/);
+    assert.match(await second.innerText(), /Variation · Position after 1\.\.\. e5/);
+    assert.match(await second.innerText(), /Line: 1\. e4 1\.\.\. e5/);
+    assert.match(await second.innerText(), /2\. Nh3/);
+    assert.match(await third.innerText(), /Variation · Position after 1\. e4/);
+    assert.match(await third.innerText(), /Evaluator unavailable · Trainer judgment is unverified/);
+    assert.doesNotMatch(await third.innerText(), /Player score:|Verified Evaluator evidence/);
+    assert.equal(await first.getByText(/Deterministic/).isVisible(), false);
+    await first.getByText('Evaluator technical details', { exact: true }).click();
+    assert.equal(await first.getByText(/Deterministic/).isVisible(), true);
+    assert.equal(await second.getByText(/Deterministic/).isVisible(), false);
+    await page.request.post(`${process.argv[2]}/__test__/finish-response`);
+    await response.getByText('Compare these evaluated Positions.', { exact: true }).waitFor();
+    assert.equal(await first.isVisible(), true, 'Streaming must preserve expanded consultations');
+    assert.equal(await first.getByText(/Deterministic/).isVisible(), true,
+      'Streaming must preserve expanded technical details');
+    assert.equal(await second.getByText(/Deterministic/).isVisible(), false);
+    await page.reload();
+    await toggle.waitFor();
+    assert.equal(await consultations.first().isVisible(), false);
+    await toggle.click();
+    assert.equal(await consultations.count(), 3);
+    assert.match(await second.innerText(), /Line: 1\. e4 1\.\.\. e5/);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exitCode = 1; });

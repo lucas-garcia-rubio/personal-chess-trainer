@@ -2,6 +2,8 @@
 import json
 from typing import Any, cast
 
+import chess
+
 from trainer.application.ports import ResponseAttempt
 
 
@@ -114,6 +116,39 @@ def discussion_view(document: dict[str, Any], requests: list[tuple[int, str]],
             for block in item["entries"]:
                 if block["type"] == "line":
                     block["moves"] = [labeled(node) for node in block["moves"]]
+                elif block["type"] == "evidence":
+                    evidence = block["value"]
+                    block["candidateLines"] = []
+                    for candidate in evidence["candidates"]:
+                        position = chess.Board(evidence["position"])
+                        labels = []
+                        for move in candidate["moves"]:
+                            prefix = str(position.fullmove_number) + ("." if position.turn else "...")
+                            labels.append(f"{prefix} {move['san']}")
+                            position.push_uci(move["uci"])
+                        block["candidateLines"].append(" ".join(labels))
+                    if evidence.get("context"):
+                        continue
+                    # Older evidence did not persist its source path. Only name
+                    # a path when the Position identifies it unambiguously.
+                    matches = [n for n in nodes.values() if n["fen"] == evidence["position"]]
+                    if evidence["position"] == board["baseFen"]:
+                        block.update(positionLabel="Base Position", lineLabel="Base Position")
+                    elif len(matches) == 1:
+                        path_labels: list[str] = []
+                        current_node = matches[0]
+                        while True:
+                            path_labels.insert(0, labeled(current_node)["label"])
+                            if current_node["parentId"] is None:
+                                break
+                            current_node = nodes[current_node["parentId"]]
+                        block.update(positionLabel="Position after " + path_labels[-1],
+                                     lineLabel=" ".join(path_labels))
+                    else:
+                        position = chess.Board(evidence["position"])
+                        block.update(positionLabel=f"Position at move {position.fullmove_number}, "
+                                     + ("White" if position.turn else "Black") + " to move",
+                                     lineLabel="Source line unavailable in this saved consultation")
     parents = {node["parentId"] for node in nodes.values()}
     variations = []
     for node in nodes.values():
