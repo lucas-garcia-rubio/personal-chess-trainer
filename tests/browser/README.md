@@ -34,9 +34,12 @@ not resize the board. Selectors use public labels and roles, not CSS classes.
 Screenshots are saved under the pytest temporary directory on success and failure;
 assertion output includes geometry on visibility failures.
 
-These tests establish desktop geometry and tab restoration. Streaming tail
-following, response grouping, move following, keyboard composition, and background
-Discussion isolation have separate owners in the spec 32 verification plan.
+The composer contract uses a gated stream to check Enter, Shift+Enter and IME
+composition, editing while a send is pending or a response is streaming, focus
+preservation, and explicit sending after completion or interruption. It also
+checks keyboard access to consent settings and revocation through the public HTTP
+routes. Run it alone with `RUN_BROWSER_TESTS=1 python -m pytest
+tests/browser/test_composer.py -q`.
 
 `test_evidence.py` checks initially collapsed Evaluator consultations within a
 Trainer response, readable Position/line references, verified and unavailable
@@ -51,3 +54,5 @@ position, absence of selection writes during inspection, and the Position actual
 received by the Trainer on the next send. `tests/test_inspected_position.py` also
 checks that next-send contract over HTTP, including unchanged Game, Analysis, Base
 Position, Variation nodes and prior Discussion messages.
+Streaming tail following and background Discussion isolation
+have separate owners in the spec 32 verification plan.
