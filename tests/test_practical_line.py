@@ -212,6 +212,9 @@ def test_practical_line_preserves_atomicity_limits_and_retry_request(
             before = client.get(URL + "/2").json()
             assert runtime.context["base_ply"] == 2
             assert runtime.context["active_position"] == before["baseFen"]
+            assert runtime.context["practical_line"]["evidence"]["context"] == {
+                "position": "Game · Position after 1... d5", "line": "1. d4 1... d5",
+            }
             assert len(evaluator.requests) == 1
             assert client.post(endpoint, json={"ply": 2, "revision": before["revision"]}).status_code == 409
             for moves in [["e2e4", "e7e6", "e4e6"], ["e2e4"] * 13]:

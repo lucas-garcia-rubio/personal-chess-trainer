@@ -128,17 +128,19 @@ def test_fragments_replay_text_moves_and_evidence_only_through_processed_cursor(
         assert "Trainer move:" not in early and "Evaluator evidence" not in early
         assert "clear development plan" not in early and '"nodes": []' in early
         move = client.get(fragment_url + "3").text
-        assert "Trainer move: e4" in move and "Trainer move: e5" not in move
+        assert ">1. e4</button>" in move and ">1... e5</button>" not in move
         assert "Evaluator evidence" not in move and "clear development plan" not in move
         final = client.get(fragment_url + str(output[-1]["sequence"])).text
-        assert final.index("Before demonstration.") < final.index("Trainer move: e4") < final.index("Trainer move: e5") < final.index("Evaluator evidence") < final.index("clear development plan")
+        assert final.index("Before demonstration.") < final.index(">1. e4</button>") < final.index(">1... e5</button>") < final.index("clear development plan")
+        assert final.count("<summary>Ver avaliações</summary>") == 1
+        assert "Verified Evaluator evidence" in final
         rendered = events(client, attempt["eventsUrl"] + "?render=true")
         assert [event["sequence"] for event in rendered if event["type"] != "text"] == [
             event["sequence"] for event in output if event["type"] != "text"]
-        assert final.count("Trainer: ") == 2
+        assert final.count('aria-label="Trainer response"') == 1
         first_move = next(event["html"] for event in rendered if event["type"] == "move")
-        assert "Trainer move: e4" in first_move
-        assert "Trainer move: e5" not in first_move and "Evaluator evidence" not in first_move
+        assert ">1. e4</button>" in first_move
+        assert ">1... e5</button>" not in first_move and "Evaluator evidence" not in first_move
         assert "clear development plan" not in first_move
         assert rendered[-1]["html"] == final
         assert client.get(URL + "/0/fragment?cursor=2").status_code == 422

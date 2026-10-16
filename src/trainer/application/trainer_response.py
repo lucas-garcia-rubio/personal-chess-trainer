@@ -2,6 +2,7 @@ from collections.abc import Iterator
 from dataclasses import asdict
 from html.parser import HTMLParser
 import json
+from typing import cast
 
 from trainer.application.ports import (
     LocalStorage,
@@ -16,12 +17,15 @@ from trainer.application.session_context import (
 )
 from trainer.application.evaluation import EvaluatePosition
 from trainer.application.practical_line import PRACTICAL_LINE_REQUEST
+from trainer.application.plain_text import PlainText
 
 
 TRAINER_INSTRUCTIONS = """You are Trainer, a chess teacher for the Player.
 Use a Socratic approach by default: ask the Player to assess plans and candidates.
 Respect an explicit request for a direct answer for that response.
 Reply in the Player's language and adapt difficulty to their Game rating and history.
+Reply in plain text with short paragraphs and chess notation. Do not use Markdown: no
+headings, bold, Markdown lists, tables, code fences or other formatting markers.
 Present chess moves in SAN. Redirect unrelated requests back to chess; opening,
 strategy, calculation and pattern questions related to chess are welcome.
 Use later Game moves diagnostically, but do not reveal them before the Player
@@ -139,7 +143,11 @@ class RespondToDiscussion:
                 "retry_of": attempt.retry_of,
             }
             if self._storage.response_request(attempt.request_id) == PRACTICAL_LINE_REQUEST:
-                evidence = self._evaluations(origin, origin_id, str(context["active_position"]))
+                node_id = cast(int | None, context["active_node_id"])
+                evidence = self._evaluations.evaluate_reference(
+                    origin, origin_id, base_ply, kind="variation" if node_id is not None else "game",
+                    ply=None if node_id is not None else base_ply, node_id=node_id,
+                )
                 evidence["purpose"] = "practical_line"
                 context["practical_line"] = {"evidence": evidence}
                 yield TrainerEvent("evidence", json.dumps(evidence))
@@ -174,56 +182,72 @@ class RespondToDiscussion:
         # on the next interaction rather than replaying into an ambiguous session.
         self._storage.set_discussion_session(*key, session)
         visible = _VisibleText()
+        plain = PlainText()
         steps = 0
         emitted = 0
-        for event in self._runtime.stream(
-            session, TRAINER_INSTRUCTIONS,
-            json.dumps(context, ensure_ascii=False), control,
-        ):
-            if control.cancelled.is_set():
-                return
-            if event.type == "step":
-                steps += 1
-                if steps >= 8:
-                    with control.lock:
-                        if control.cancelled.is_set():
-                            return
-                        self._runtime.abort(session)
-                    yield TrainerEvent(
-                        "limited", "Trainer reached the limit of 8 agent steps. Continue with another request.",
-                    )
+        try:
+            for event in self._runtime.stream(
+                session, TRAINER_INSTRUCTIONS,
+                json.dumps(context, ensure_ascii=False), control,
+            ):
+                if control.cancelled.is_set():
                     return
-                yield TrainerEvent("activity", f"Trainer completed agent step {steps} of 8.")
-            elif event.type == "activity":
-                yield event
-            elif event.type == "text":
-                visible.feed(event.text)
-                text = "".join(visible.text)
-                visible.text.clear()
-                if text:
-                    emitted += len(text)
-                    yield TrainerEvent("text", text)
-            elif event.type in {"completed", "interrupted", "failed", "limited"}:
-                if event.type == "completed" and "practical_line" in context and attempt is not None:
-                    current = next(a for a in self._storage.response_attempts(origin, origin_id, base_ply)
-                                   if a.id == attempt.id)
-                    if not any(e["type"] == "practical_line" for e in current.events):
-                        raise RuntimeError("Practical Line requires a board demonstration.")
-                if event.type == "completed" and not emitted:
-                    raise RuntimeError("Trainer returned no visible response.")
-                # Runtime diagnostics are private, never relay provider error text.
-                descriptions = {
-                    "completed": "", "interrupted": "Trainer response interrupted.",
-                    "failed": "Trainer response failed. Your Discussion is saved; please try again.",
-                    "limited": "Trainer reached its response limit. Continue with another request.",
-                }
-                if event.type == "completed":
-                    chars = context_size(context) + emitted
-                    if context["context_delivery"] == "delta" and previous is not None:
-                        chars += previous.context_chars
-                    # Only the response owner may acknowledge delivery, together
-                    # with persisting completion under its cancellation lock.
-                    control.context_chars = chars
-                yield TrainerEvent(event.type, descriptions[event.type])
-                return
-        raise RuntimeError("Trainer stream ended before completion.")
+                if event.type == "step":
+                    steps += 1
+                    if steps >= 8:
+                        with control.lock:
+                            if control.cancelled.is_set():
+                                return
+                            self._runtime.abort(session)
+                        tail = plain.finish()
+                        if tail:
+                            yield TrainerEvent("text", tail)
+                        yield TrainerEvent(
+                            "limited", "Trainer reached the limit of 8 agent steps. Continue with another request.",
+                        )
+                        return
+                    yield TrainerEvent("activity", f"Trainer completed agent step {steps} of 8.")
+                elif event.type == "activity":
+                    yield event
+                elif event.type == "text":
+                    visible.feed(event.text)
+                    text = plain.feed("".join(visible.text))
+                    visible.text.clear()
+                    if text:
+                        emitted += len(text)
+                        yield TrainerEvent("text", text)
+                elif event.type in {"completed", "interrupted", "failed", "limited"}:
+                    tail = plain.finish()
+                    if tail:
+                        emitted += len(tail)
+                        yield TrainerEvent("text", tail)
+                    if event.type == "completed" and "practical_line" in context and attempt is not None:
+                        current = next(a for a in self._storage.response_attempts(origin, origin_id, base_ply)
+                                       if a.id == attempt.id)
+                        if not any(e["type"] == "practical_line" for e in current.events):
+                            raise RuntimeError("Practical Line requires a board demonstration.")
+                    if event.type == "completed" and not emitted:
+                        raise RuntimeError("Trainer returned no visible response.")
+                    # Runtime diagnostics are private, never relay provider error text.
+                    descriptions = {
+                        "completed": "", "interrupted": "Trainer response interrupted.",
+                        "failed": "Trainer response failed. Your Discussion is saved; please try again.",
+                        "limited": "Trainer reached its response limit. Continue with another request.",
+                    }
+                    if event.type == "completed":
+                        chars = context_size(context) + emitted
+                        if context["context_delivery"] == "delta" and previous is not None:
+                            chars += previous.context_chars
+                        # Only the response owner may acknowledge delivery, together
+                        # with persisting completion under its cancellation lock.
+                        control.context_chars = chars
+                    yield TrainerEvent(event.type, descriptions[event.type])
+                    return
+            raise RuntimeError("Trainer stream ended before completion.")
+        except Exception:
+            # Retain visible teaching even if the provider stops mid-Markdown.
+            # The response owner still handles failure and aborts the runtime.
+            tail = plain.finish()
+            if tail and not control.cancelled.is_set():
+                yield TrainerEvent("text", tail)
+            raise

@@ -71,3 +71,7 @@ O transporte responde com o NDJSON versionado em
 `lichess_mock.requests` e falha localmente para endpoints inesperados. Para
 confirmar que uma página persistida abre offline, use
 `lichess_mock.fail_on_request(reason)` ao reconstruir a aplicação.
+
+A verificação desktop em Chromium usa respostas controladas, sem modelo externo.
+Veja [tests/browser/README.md](tests/browser/README.md) para instalar o harness e
+executar os testes reais de geometria, rolagem e alternância de abas.
