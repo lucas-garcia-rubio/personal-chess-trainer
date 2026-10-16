@@ -324,7 +324,7 @@
               </div>
             </div>
             <div class="trainer-footer">
-              <details class="trainer-settings">
+              <details class="trainer-settings"{% if not trainer_consent %} open{% endif %}>
                 <summary>Trainer settings and consent</summary>
                 <div>
                   <p>OpenCode may send Game moves, Analysis, Variations and Discussion text,
@@ -375,6 +375,20 @@
       const deleteDiscussionButton = document.querySelector('[data-action="delete-discussion"]');
       const discussionError = document.querySelector("[data-discussion-error]");
       const trainerForm = document.querySelector(".trainer-form");
+      const composer = trainerForm.querySelector("textarea");
+      const consent = document.querySelector("#trainer-consent");
+      const pendingSends = new Set();
+      let consentSaving = false;
+      let composing = false;
+      let draftRevision = 0;
+      composer.addEventListener("input", () => { draftRevision += 1; });
+      composer.addEventListener("compositionstart", () => { composing = true; });
+      composer.addEventListener("compositionend", () => { composing = false; });
+      composer.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || event.shiftKey || composing || event.isComposing || event.keyCode === 229) return;
+        event.preventDefault();
+        if (!trainerForm.querySelector('[type="submit"]').disabled) trainerForm.requestSubmit();
+      });
       const interruptButton = document.querySelector('[data-action="interrupt-response"]');
       const retryButton = document.querySelector('[data-action="retry-response"]');
       const responseStreams = new Map();
@@ -459,6 +473,11 @@
       trainerForm.addEventListener("submit", async (event) => {
         event.preventDefault();
         const basePly = gameIndex;
+        if (composing || consentSaving || !consent.checked || pendingSends.has(basePly)
+            || runningAttempt(trainerData.discussions[String(basePly)])
+            || {{ (not trainer_availability.is_available) | tojson }}) return;
+        const submittedRevision = draftRevision;
+        pendingSends.add(basePly);
         const body = new URLSearchParams(new FormData(trainerForm));
         body.set("position", JSON.stringify(displayedPositionReference()));
         body.set("revision", JSON.stringify(trainerData.discussions[String(basePly)]?.revision ?? null));
@@ -469,7 +488,7 @@
           const response = await fetch(trainerForm.action, { method: "POST", body });
           if (!response.ok) throw new Error((await response.json()).detail || "Trainer request failed.");
           const attempt = await response.json();
-          trainerForm.querySelector("textarea").value = "";
+          if (draftRevision === submittedRevision) composer.value = "";
           bestLinePreview = null;
           previewPanel.hidden = true;
           await refreshDiscussion(basePly, attempt.id, 0);
@@ -479,6 +498,7 @@
           discussionError.textContent = error.message;
           discussionError.hidden = false;
         } finally {
+          pendingSends.delete(basePly);
           renderDiscussion();
         }
       });
@@ -505,9 +525,8 @@
       retryButton.addEventListener("click", () => responseAction("retry"));
       document.querySelector("#trainer-consent").addEventListener("change", async (event) => {
         const checkbox = event.target;
-        const submit = trainerForm.querySelector('[type="submit"]');
-        const wasDisabled = submit.disabled;
-        submit.disabled = true;
+        consentSaving = true;
+        renderDiscussion();
         checkbox.disabled = true;
         try {
           const response = await fetch("/trainer/consent", {
@@ -520,7 +539,8 @@
           alert("Could not save Trainer consent. Please try again.");
         } finally {
           checkbox.disabled = false;
-          submit.disabled = wasDisabled;
+          consentSaving = false;
+          renderDiscussion();
         }
       });
       const basePlyInput = document.querySelector('[name="base_ply"]');
@@ -726,7 +746,7 @@
         const lastAttempt = discussion?.attempts?.at(-1);
         interruptButton.hidden = !running;
         retryButton.hidden = !lastAttempt || !["failed", "interrupted", "limited"].includes(lastAttempt.status);
-        trainerForm.querySelector('[type="submit"]').disabled = Boolean(running) || {{ (not trainer_availability.is_available) | tojson }};
+        trainerForm.querySelector('[type="submit"]').disabled = pendingSends.has(gameIndex) || consentSaving || Boolean(running) || {{ (not trainer_availability.is_available) | tojson }};
         practicalLineButton.disabled = discussionMutationPending || Boolean(running) || {{ (not trainer_availability.is_available) | tojson }};
         deleteDiscussionButton.hidden = !discussion;
         deleteDiscussionButton.disabled = discussionMutationPending || Boolean(running);
