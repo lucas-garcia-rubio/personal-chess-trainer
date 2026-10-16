@@ -1,9 +1,14 @@
 <div data-discussion-fragment data-base-ply="{{ base_ply }}" data-attempt-id="{{ view.attempt_id or '' }}" data-cursor="{{ view.cursor if view.cursor is not none else '' }}">
-{% for entry in view.entries %}
+{% for item in view.entries %}
+{% if item.type == 'player' %}<p class="discussion-entry">Player: {{ item.text }}</p>
+{% else %}
+<section class="trainer-response" aria-label="Trainer response" data-attempt-id="{{ item.attemptId }}">
+<header>Trainer: {% if item.retry %}<span>New attempt</span>{% endif %}</header>
+{% for entry in item.entries %}
   {% if entry.type == 'evidence' %}
   {% set evidence = entry.value %}
   <article class="evaluator-evidence" data-attempt-id="{{ entry.attemptId }}" data-sequence="{{ entry.sequence }}">
-    <strong>Evaluator evidence · Trainer response {{ entry.attemptId }}</strong>
+    <strong>Evaluator evidence</strong>
     {% if evidence.status == 'verified' %}
     <p>{{ evidence.provenance.name }} {{ evidence.provenance.version or '' }} · {{ evidence.provenance.parameters }}</p>
     {% for candidate in evidence.candidates %}<p data-score-value="{{ candidate.score.value }}">Player score: {{ candidate.score.kind }} {{ candidate.score.value }} · {% for move in candidate.moves %}{{ move.san }} {% endfor %}</p>{% endfor %}
@@ -15,16 +20,23 @@
     <strong>Practical Line · {{ line.status }}</strong><p>{{ line.reason }}</p>
     <p>Best Line: {% if line.bestScore %}{{ line.bestScore.kind }} {{ line.bestScore.value }}{% else %}unverified{% endif %} · Practical Line: {% if line.selectedScore %}{{ line.selectedScore.kind }} {{ line.selectedScore.value }}{% else %}unverified{% endif %} · Difference (cp, Player): {{ line.differenceCp if line.differenceCp is not none else 'not comparable' }}{% if line.isBestLine %} · Also the Best Line{% endif %}</p>
   </article>
-  {% elif entry.type == 'move' %}
-  <p class="discussion-entry" data-sequence="{{ entry.sequence }}">Trainer move: {{ entry.value.san }}</p>
+  {% elif entry.type == 'line' %}
+  <div class="move-line" role="group" aria-label="Demonstrated line">
+    {% for move in entry.moves %}<button type="button" data-node-id="{{ move.id }}" aria-pressed="{{ 'true' if view.board.activeNodeId == move.id else 'false' }}">{{ move.label }}</button>{% endfor %}
+  </div>
   {% else %}
-  <p class="discussion-entry"{% if entry.sequence is defined %} data-sequence="{{ entry.sequence }}"{% endif %}>{% if entry.type == 'player' %}Player: {% elif entry.type == 'text' %}Trainer: {% else %}{{ entry.type }}: {% endif %}{{ entry.text }}</p>
+  <p class="discussion-entry"{% if entry.sequence is defined %} data-sequence="{{ entry.sequence }}"{% endif %}>{% if entry.type == 'player' %}Player: {% elif entry.type == 'text' %}{% else %}{{ entry.type }}: {% endif %}{{ entry.text }}</p>
   {% endif %}
+{% endfor %}
+{% if item.status != 'completed' %}<p role="status">{{ {'running': 'Responding…', 'failed': 'Response failed. Your Discussion is saved.', 'interrupted': 'Response interrupted.', 'limited': 'Response paused at its limit.'}[item.status] }}</p>{% endif %}
+</section>
+{% endif %}
 {% else %}<p>No Discussion for this Position yet.</p>{% endfor %}
-{% for attempt in view.board.attempts %}<p>Trainer attempt {{ attempt.id }}: {{ attempt.status }}{% if attempt.retry_of %} (retry of {{ attempt.retry_of }}){% endif %}</p>{% endfor %}
 <nav data-discussion-branches aria-label="Discussion Variations">
   <button type="button" data-node-id="" aria-pressed="{{ 'true' if view.board.activeNodeId is none else 'false' }}">Base Position</button>
-  {% for node in view.board.nodes %}<button type="button" data-node-id="{{ node.id }}" aria-pressed="{{ 'true' if view.board.activeNodeId == node.id else 'false' }}">{{ node.san }} · {{ node.author }} · branch {{ node.id }}</button>{% endfor %}
+  {% for line in view.variations %}<div class="move-line" role="group" aria-label="Variation">
+  {% for node in line %}<button type="button" data-node-id="{{ node.id }}" aria-pressed="{{ 'true' if view.board.activeNodeId == node.id else 'false' }}">{{ node.label }} · {{ node.author | capitalize }}</button>{% endfor %}
+  </div>{% endfor %}
 </nav>
 <script type="application/json" data-discussion-board>{{ view.board | tojson }}</script>
 </div>

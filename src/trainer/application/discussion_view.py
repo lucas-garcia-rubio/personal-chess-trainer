@@ -50,10 +50,15 @@ def discussion_view(document: dict[str, Any], requests: list[tuple[int, str]],
                 board["nodes"] = list(reversed(ancestors))
                 board["activeNodeId"] = anchor
                 board["revision"] = attempt.revision
+        response: dict[str, Any] = {"type": "response", "attemptId": attempt.id,
+                                    "retry": attempt.retry_of is not None, "entries": []}
+        entries.append(response)
+        blocks = response["entries"]
         for event in events:
             kind = event["type"]
             if kind in {"completed", "failed", "interrupted", "limited"}:
                 status = str(kind)
+                continue
             if kind in {"running", "activity"}:
                 continue
             entry: dict[str, Any] = {**event, "attemptId": attempt.id}
@@ -62,11 +67,17 @@ def discussion_view(document: dict[str, Any], requests: list[tuple[int, str]],
             # Runtime text events are deltas, not separate Trainer messages.
             # Merge adjacent visible text only within the same attempt; moves
             # and evidence must retain their place between text blocks.
-            if (kind == "text" and entries and entries[-1]["type"] == "text"
-                    and entries[-1].get("attemptId") == attempt.id):
-                entries[-1]["text"] += str(event["text"])
+            if (kind == "text" and blocks and blocks[-1]["type"] == "text"
+                    and blocks[-1].get("attemptId") == attempt.id):
+                blocks[-1]["text"] += str(event["text"])
+            elif kind == "move":
+                if (blocks and blocks[-1]["type"] == "line"
+                        and blocks[-1]["moves"][-1]["id"] == entry["value"]["parentId"]):
+                    blocks[-1]["moves"].append(entry["value"])
+                else:
+                    blocks.append({"type": "line", "moves": [entry["value"]]})
             else:
-                entries.append(entry)
+                blocks.append(entry)
             if attempt.id == attempt_id:
                 if kind == "move":
                     node = entry["value"]
@@ -75,6 +86,7 @@ def discussion_view(document: dict[str, Any], requests: list[tuple[int, str]],
                     board["revision"] = node["revision"]
                 elif kind == "text":
                     board["revision"] += 1
+        response["status"] = status
         visible_attempts.append({"id": attempt.id, "status": status, "retry_of": attempt.retry_of,
                                  "events": events})
     if attempt_id is None:
@@ -88,4 +100,28 @@ def discussion_view(document: dict[str, Any], requests: list[tuple[int, str]],
         path.insert(0, node)
         node_id = node["parentId"]
     board.update(moves=path, activeFen=path[-1]["fen"] if path else board["baseFen"], attempts=visible_attempts)
-    return {"entries": entries, "board": board, "attempt_id": attempt_id, "cursor": cursor}
+    nodes = {node["id"]: node for node in board["nodes"]}
+
+    def labeled(node: dict[str, Any]) -> dict[str, Any]:
+        parent = nodes.get(node["parentId"])
+        fen = parent["fen"] if parent else board["baseFen"]
+        fields = fen.split()
+        prefix = fields[5] + ("." if fields[1] == "w" else "...")
+        return {**node, "label": f"{prefix} {node['san']}"}
+
+    for item in entries:
+        if item["type"] == "response":
+            for block in item["entries"]:
+                if block["type"] == "line":
+                    block["moves"] = [labeled(node) for node in block["moves"]]
+    parents = {node["parentId"] for node in nodes.values()}
+    variations = []
+    for node in nodes.values():
+        if node["id"] not in parents:
+            line: list[dict[str, Any]] = []
+            current: dict[str, Any] | None = node
+            while current is not None:
+                line.insert(0, labeled(current))
+                current = nodes.get(current["parentId"])
+            variations.append(line)
+    return {"variations": variations, "entries": entries, "board": board, "attempt_id": attempt_id, "cursor": cursor}
