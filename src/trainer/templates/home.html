@@ -4,26 +4,181 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Personal Chess Trainer</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        background: #171512;
+        color: #f3eee4;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      a { color: #dcb86b; }
+      main {
+        width: min(68rem, calc(100% - 2rem));
+        margin: 2rem auto;
+      }
+      .page-heading {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding-bottom: 1.5rem;
+        border-bottom: 1px solid #4f493f;
+      }
+      .brand-mark, .empty-mark {
+        display: grid;
+        place-items: center;
+        width: 3rem;
+        height: 3rem;
+        flex-shrink: 0;
+        border: 1px solid #665d50;
+        border-radius: 0.4rem;
+        background: #302a23;
+        color: #dcb86b;
+      }
+      .brand-mark svg, .empty-mark svg { width: 1.75rem; height: 1.75rem; fill: currentColor; }
+      .brand-name { margin: 0; font-weight: 650; }
+      .brand-caption { margin: 0.2rem 0 0; color: #b7aa98; font-size: 0.85rem; }
+      .welcome {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+        padding: 2.5rem 0;
+      }
+      .eyebrow {
+        margin: 0 0 0.5rem;
+        color: #dcb86b;
+        font-size: 0.75rem;
+        font-weight: 650;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      h1 { margin: 0; font-size: clamp(1.8rem, 5vw, 2.5rem); letter-spacing: -0.04em; }
+      .welcome-description { margin: 0.75rem 0 0; color: #b7aa98; line-height: 1.6; }
+      .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+      .actions form { margin: 0; }
+      .button {
+        display: inline-flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 2.75rem;
+        padding: 0.65rem 1rem;
+        border: 1px solid #665d50;
+        border-radius: 0.25rem;
+        background: #302a23;
+        color: #f3eee4;
+        font: inherit;
+        font-size: 0.9rem;
+        font-weight: 600;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .button:hover { background: #40372c; border-color: #dcb86b; }
+      .button-primary { background: #dcb86b; border-color: #dcb86b; color: #171512; }
+      .button-primary:hover { background: #e8c984; }
+      a:focus-visible, button:focus-visible { outline: 2px solid #dcb86b; outline-offset: 4px; }
+      .library-heading { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
+      h2 { margin: 0; font-size: 1.15rem; }
+      .game-count {
+        padding: 0.2rem 0.6rem;
+        border: 1px solid #4f493f;
+        border-radius: 1rem;
+        color: #b7aa98;
+        font-size: 0.8rem;
+      }
+      .game-list { display: grid; gap: 0.75rem; margin: 0; padding: 0; list-style: none; }
+      .game-link {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 1.5rem;
+        padding: 1.25rem;
+        border: 1px solid #4f493f;
+        border-radius: 0.4rem;
+        background: #24201b;
+        color: inherit;
+        text-decoration: none;
+      }
+      .game-link:hover { background: #342c22; border-color: #a58b66; }
+      .game-opponent { display: block; font-weight: 650; overflow-wrap: anywhere; }
+      .game-meta { display: block; margin-top: 0.4rem; color: #b7aa98; font-size: 0.85rem; }
+      .open-analysis { color: #dcb86b; font-size: 0.85rem; white-space: nowrap; }
+      .empty-state {
+        padding: 3rem 1.5rem;
+        border: 1px dashed #665d50;
+        border-radius: 0.4rem;
+        background: #211e19;
+        text-align: center;
+      }
+      .empty-mark { margin: 0 auto 1.25rem; }
+      .empty-state h3 { margin: 0; font-size: 1.1rem; }
+      .empty-state p { max-width: 28rem; margin: 0.75rem auto 0; color: #b7aa98; line-height: 1.6; }
+      @media (max-width: 40rem) {
+        main { margin: 1rem auto; }
+        .welcome { padding: 2rem 0; }
+        .actions { width: 100%; }
+        .actions > * { flex: 1; }
+        .actions .button { width: 100%; }
+        .game-link { grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem; padding: 1rem; }
+      }
+    </style>
   </head>
   <body>
     <main>
-      <h1>Personal Chess Trainer</h1>
-      <p><a href="/imports/new">Import a PGN</a></p>
-      <form action="/sync" method="post">
-        <button type="submit">Synchronize</button>
-      </form>
-      {% if games %}
-        <ul>
-          {% for game in games %}
-            <li>
-              <a href="/analyses/{{ game.origin }}/{{ game.origin_id }}">{{ game.opponent }}</a>
-              <span>{{ game.result }} · {{ game.time_control }} · {{ game.critical_count }} Critical Moments</span>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p>Your games will appear here after the first sync.</p>
-      {% endif %}
+      <header class="page-heading">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" focusable="false"><path d="M7 4h4v4h3V4h4v4h3V4h4v9l-4 3v8h3v4H8v-4h3v-8l-4-3z"/></svg>
+        </span>
+        <div>
+          <p class="brand-name">Personal Chess Trainer</p>
+          <p class="brand-caption">Your personal analysis workspace</p>
+        </div>
+      </header>
+      <section class="welcome" aria-labelledby="welcome-title">
+        <div>
+          <p class="eyebrow">Study. Reflect. Improve.</p>
+          <h1 id="welcome-title">Every game is a lesson.</h1>
+          <p class="welcome-description">Revisit your games and explore the moments that matter.</p>
+        </div>
+        <div class="actions">
+          <a class="button" href="/imports/new">Import a PGN</a>
+          <form action="/sync" method="post">
+            <button class="button button-primary" type="submit">Synchronize</button>
+          </form>
+        </div>
+      </section>
+      <section aria-labelledby="games-title">
+        <header class="library-heading">
+          <h2 id="games-title">Your games</h2>
+          <span class="game-count">{{ games | length }} {{ 'game' if games | length == 1 else 'games' }}</span>
+        </header>
+        {% if games %}
+          <ul class="game-list">
+            {% for game in games %}
+              <li>
+                <a class="game-link" href="/analyses/{{ game.origin }}/{{ game.origin_id }}">
+                  <span>
+                    <span class="game-opponent">vs {{ game.opponent }}</span>
+                    <span class="game-meta">{{ game.result }} · {{ game.time_control }} · {{ game.critical_count }} Critical Moments</span>
+                  </span>
+                  <span class="open-analysis">Analysis <span aria-hidden="true">→</span></span>
+                </a>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="empty-state">
+            <span class="empty-mark" aria-hidden="true">
+              <svg viewBox="0 0 32 32" focusable="false"><path d="M7 4h4v4h3V4h4v4h3V4h4v9l-4 3v8h3v4H8v-4h3v-8l-4-3z"/></svg>
+            </span>
+            <h3>Your next lesson starts here.</h3>
+            <p>Your games will appear here after the first sync.</p>
+            <p>Synchronize your games from Lichess or import a PGN to start exploring your Analysis.</p>
+          </div>
+        {% endif %}
+      </section>
     </main>
   </body>
 </html>
