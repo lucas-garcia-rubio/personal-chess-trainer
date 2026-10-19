@@ -39,7 +39,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     const originalBoard = await visibleInViewport(board);
     assert.ok(originalBoard.width >= 240, 'Board remains usable at short desktop heights');
     assert.ok(Math.abs(originalBoard.width - originalBoard.height) < 1, 'Square board');
-    for (const name of ['Next →', '← Previous', 'Game', 'Discussion', 'Show Best Line', 'Mostrar linha prática']) {
+    for (const name of ['Next →', '← Previous', 'Game', 'Discussion', 'Mostrar melhor linha', 'Mostrar linha prática']) {
       await visibleInViewport(page.getByRole('button', { name, exact: true }));
     }
     const analysisScroll = await scroll(analysis, 400);
