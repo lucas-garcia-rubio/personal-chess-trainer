@@ -230,7 +230,7 @@ def test_failure_and_step_limit_are_visible_durable_and_retryable(
 
 
 @pytest.mark.parametrize("ending", ["completed", "provider", "disconnect", "steps"])
-def test_real_http_adapter_subscribes_before_prompt_and_filters_v1_events(
+def test_real_http_adapter_subscribes_before_prompt_and_filters_v2_events(
     migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock,
     ending: str,
 ) -> None:
@@ -240,54 +240,49 @@ def test_real_http_adapter_subscribes_before_prompt_and_filters_v1_events(
     prompted = Event()
 
     def frame(kind: str, properties: dict[str, object]) -> bytes:
-        return ("data: " + json.dumps({"type": kind, "properties": properties}) + "\n\n").encode()
+        return ("data: " + json.dumps({"type": kind, "data": properties}) + "\n\n").encode()
 
     class RuntimeEvents(httpx.SyncByteStream):
         def __iter__(self) -> Iterator[bytes]:
             yield frame("server.connected", {})
             assert prompted.is_set()
-            yield frame("message.updated", {"info": {"id": "user", "sessionID": "session-first", "role": "user"}})
-            yield frame("message.updated", {"info": {"id": "assistant", "sessionID": "session-first", "role": "assistant"}})
-            parts: list[dict[str, object]] = [
-                {"id": "wrong", "messageID": "assistant", "sessionID": "another", "type": "text", "text": "WRONG_SESSION"},
-                {"id": "hidden", "messageID": "assistant", "type": "reasoning", "text": "HIDDEN"},
-                {"id": "user-text", "messageID": "user", "type": "text", "text": "USER_ECHO"},
-                {"id": "synthetic", "messageID": "assistant", "type": "text", "text": "PROMPT", "synthetic": True},
-                {"id": "t1", "messageID": "assistant", "type": "text", "text": "Consider "},
-                {"id": "tool1", "messageID": "assistant", "type": "tool", "state": {"status": "running", "input": "SECRET_INPUT"}},
-                {"id": "t1", "messageID": "assistant", "type": "text", "text": "Consider Nf3."},
-                {"id": "t1", "messageID": "assistant", "type": "text", "text": "Consider Nf3."},
-            ]
-            for part in parts:
-                yield frame("message.part.updated", {"part": {"sessionID": "session-first", **part}})
-            yield frame("message.part.delta", {"sessionID": "session-first", "messageID": "assistant", "partID": "t1", "field": "text", "delta": " Develop."})
-            yield frame("message.part.updated", {"part": {"sessionID": "session-first", "messageID": "assistant", "id": "t1", "type": "text", "text": "Consider Nf3. Develop."}})
+            data = {"sessionID": "session-first", "assistantMessageID": "assistant", "ordinal": 0}
+            yield frame("session.execution.started", {"sessionID": "session-first"})
+            yield frame("session.text.delta", {**data, "sessionID": "another", "delta": "WRONG_SESSION"})
+            yield frame("session.reasoning.delta", {**data, "delta": "HIDDEN"})
+            yield frame("session.synthetic", {"sessionID": "session-first", "text": "PROMPT"})
+            yield frame("session.text.started", data)
+            yield frame("session.text.delta", {**data, "delta": "Consider "})
+            yield frame("session.tool.called", {**data, "id": "tool1", "input": {"secret": "SECRET_INPUT"}})
+            yield frame("session.text.delta", {**data, "delta": "Nf3."})
+            yield frame("session.text.delta", {**data, "delta": " Develop."})
+            yield frame("session.text.ended", {**data, "text": "Consider Nf3. Develop."})
             if ending == "provider":
-                yield frame("session.error", {"sessionID": "session-first", "error": {"message": "PRIVATE_PROVIDER_ERROR"}})
+                yield frame("session.execution.failed", {"sessionID": "session-first", "error": {"message": "PRIVATE_PROVIDER_ERROR"}})
                 return
             if ending == "disconnect":
                 return
             if ending == "steps":
                 for index in range(20):
-                    yield frame("message.part.updated", {"part": {"id": f"step{index}", "sessionID": "session-first", "messageID": "assistant", "type": "step-finish"}})
-            yield frame("session.idle", {"sessionID": "another"})
-            yield frame("session.idle", {"sessionID": "session-first"})
+                    yield frame("session.step.ended", {"sessionID": "session-first", "assistantMessageID": f"step{index}"})
+            yield frame("session.execution.succeeded", {"sessionID": "another"})
+            yield frame("session.execution.succeeded", {"sessionID": "session-first"})
 
     def server(request: httpx.Request) -> httpx.Response:
         paths.append(request.url.path)
-        if request.url.path == "/session":
-            return httpx.Response(200, json={"id": "session-first"})
-        if request.url.path == "/event":
+        if request.url.path == "/api/session":
+            assert json.loads(request.content)["agent"] == "trainer"
+            return httpx.Response(200, json={"data": {"id": "session-first"}})
+        if request.url.path == "/api/event":
             return httpx.Response(200, stream=RuntimeEvents(), headers={"content-type": "text/event-stream"})
-        if request.url.path == "/session/session-first/abort":
-            return httpx.Response(200, json=True)
-        assert request.url.path == "/session/session-first/prompt_async"
+        if request.url.path == "/api/session/session-first/interrupt":
+            return httpx.Response(200, json={"interrupted": True})
+        assert request.url.path == "/api/session/session-first/prompt"
         body = json.loads(request.content)
-        assert body["agent"] == "trainer"
         assert "model" not in body
-        assert body["parts"][0]["type"] == "text"
+        assert isinstance(body["text"], str)
         prompted.set()
-        return httpx.Response(204)
+        return httpx.Response(200, json={"data": {"id": "input"}})
 
     class HTTPRuntime(StreamingOpenCode):
         def __init__(self) -> None:
@@ -315,7 +310,7 @@ def test_real_http_adapter_subscribes_before_prompt_and_filters_v1_events(
         assert [e["text"] for e in output if e["type"] == "text"] == ["Consider ", "Nf3.", " Develop."]
         assert "SECRET_INPUT" not in json.dumps(output)
         assert "PRIVATE_PROVIDER_ERROR" not in json.dumps(output)
-        assert paths == ["/session", "/event", "/session/session-first/prompt_async"] + (["/session/session-first/abort"] if ending in {"steps", "disconnect"} else [])
+        assert paths == ["/api/session", "/api/event", "/api/session/session-first/prompt"] + (["/api/session/session-first/interrupt"] if ending in {"steps", "disconnect"} else [])
 
 
 def test_interrupt_before_session_creation_prevents_provider_dispatch(

@@ -5,7 +5,7 @@ Aplicativo web local para revisar as partidas de xadrez do Player.
 ## Desenvolvimento
 
 O projeto requer Python 3.12 ou posterior, Flyway `13.9.0` com suporte a SQLite,
-OpenCode para o Trainer e usa uma virtual environment local:
+OpenCode V2 (2.2.3 ou posterior na série 2.x) para o Trainer e usa uma virtual environment local:
 
 ```bash
 python -m venv .venv
@@ -56,6 +56,17 @@ trainer serve
 ```
 
 A Home estará disponível em <http://127.0.0.1:8000>.
+
+### OpenCode V2
+
+Configure e autentique um provedor e escolha um modelo padrão no OpenCode antes
+de usar o Trainer. A aplicação usa a API HTTP V2, não a API da série 1.x.
+O mínimo 2.2.3 garante as políticas que bloqueiam plugins, skills e MCPs externos;
+somente as três ferramentas de xadrez do Trainer são permitidas.
+Não é necessário reconfigurar `[opencode]` nem migrar o banco da aplicação:
+sessões antigas ou incompatíveis são reconstruídas a partir da Discussion salva.
+O servidor dedicado usa senha efêmera e não reinicia nem reutiliza o serviço
+compartilhado do OpenCode.
 
 ## Verificação
 

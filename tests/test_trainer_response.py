@@ -135,26 +135,26 @@ def test_production_http_exchange_only_persists_visible_assistant_text(
     def server(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         assert request.headers["Authorization"].startswith("Basic ")
-        if request.url.path == "/session":
+        if request.url.path == "/api/session":
             assert request.method == "POST"
-            return httpx.Response(200, json={"id": "ses_private"})
-        assert request.url.path == "/session/ses_private/message"
+            assert json.loads(request.content)["agent"] == "trainer"
+            return httpx.Response(200, json={"data": {"id": "ses_private"}})
+        if request.url.path == "/api/event":
+            payloads = [
+                {"type": "server.connected", "data": {}},
+                {"type": "session.reasoning.delta", "data": {"sessionID": "ses_private", "delta": "HIDDEN_REASONING"}},
+                {"type": "session.tool.success", "data": {"sessionID": "ses_private", "output": "RAW_TOOL_EVENT"}},
+                {"type": "session.synthetic", "data": {"sessionID": "ses_private", "text": "TECHNICAL_PROMPT"}},
+                {"type": "session.text.ended", "data": {"sessionID": "other", "assistantMessageID": "a", "ordinal": 0, "text": "WRONG_SESSION"}},
+                {"type": "session.text.ended", "data": {"sessionID": "ses_private", "assistantMessageID": "a", "ordinal": 0, "text": '<script>EXECUTABLE</script><b>Nf3</b> develops a piece.'}},
+                {"type": "session.execution.succeeded", "data": {"sessionID": "ses_private"}},
+            ]
+            return httpx.Response(200, text="".join("data: " + json.dumps(p) + "\n\n" for p in payloads))
+        assert request.url.path == "/api/session/ses_private/prompt"
         body = json.loads(request.content)
-        assert body["agent"] == "trainer"
         assert "model" not in body
-        assert body["parts"][0]["type"] == "text"
-        assert json.loads(body["parts"][0]["text"])["history"][0]["body"] == "What now?"
-        return httpx.Response(200, json={
-            "info": {"role": "assistant", "sessionID": "ses_private"},
-            "parts": [
-                {"type": "reasoning", "text": "HIDDEN_REASONING"},
-                {"type": "tool", "state": {"output": "RAW_TOOL_EVENT"}},
-                {"type": "text", "text": "TECHNICAL_PROMPT", "synthetic": True},
-                {"type": "text", "text": "IGNORED_TEXT", "ignored": True},
-                {"type": "text", "text": "WRONG_SESSION", "sessionID": "other"},
-                {"type": "text", "text": '<script>EXECUTABLE</script><b>Nf3</b> develops a piece.'},
-            ],
-        })
+        assert json.loads(body["text"])["history"][0]["body"] == "What now?"
+        return httpx.Response(200, json={"data": {"id": "input"}})
 
     class HTTPRuntime(FakeOpenCode):
         def __init__(self) -> None:
@@ -180,7 +180,7 @@ def test_production_http_exchange_only_persists_visible_assistant_text(
         assert requests == []
         page = client.post("/analyses/lichess/q7ZvsdUF/discussions", data=fields)
         assert page.status_code == 200
-        assert len(requests) == 2
+        assert len(requests) == 3
         discussion = cast(dict[str, dict[str, object]], _trainer_data(page.text)["discussions"])["0"]
         assert discussion["messages"] == [
             {"author": "player", "body": "What now?"},

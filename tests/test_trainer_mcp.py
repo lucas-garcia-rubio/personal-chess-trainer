@@ -165,13 +165,24 @@ def test_production_runtime_receives_only_approved_tools_and_ephemeral_mcp_confi
                                   trainer_runtime=runtime)) as client:
             assert client.get("/").status_code == 200
             config = configurations[-1]
-            assert config["permission"] == {"*": "deny"}
-            assert config["agent"]["trainer"]["permission"] == {
-                "*": "deny", "trainer_read_context": "allow", "trainer_play_line": "allow",
-                "trainer_evaluate_position": "allow",
-            }
-            assert "model" not in config["agent"]["trainer"]
-            assert list(config["mcp"]) == ["trainer"]
-            assert config["mcp"]["trainer"]["url"].startswith("http://127.0.0.1:")
-            assert config["mcp"]["trainer"]["oauth"] is False
-    assert configurations[0]["mcp"]["trainer"]["headers"] != configurations[1]["mcp"]["trainer"]["headers"]
+            assert config["permissions"] == [{"action": "*", "resource": "*", "effect": "deny"}]
+            assert config["agents"]["trainer"]["permissions"] == [
+                {"action": "*", "resource": "*", "effect": "deny"},
+                {"action": "trainer_read_context", "resource": "*", "effect": "allow"},
+                {"action": "trainer_play_line", "resource": "*", "effect": "allow"},
+                {"action": "trainer_evaluate_position", "resource": "*", "effect": "allow"},
+            ]
+            assert "model" not in config["agents"]["trainer"]
+            assert config["agents"]["trainer"]["system"]
+            assert config["policies"] == [
+                {"action": "mcp.use", "resource": "*", "effect": "deny"},
+                {"action": "mcp.use", "resource": "trainer", "effect": "allow"},
+                {"action": "skill.use", "resource": "*", "effect": "deny"},
+                {"action": "plugin.use", "resource": "*", "effect": "deny"},
+            ]
+            assert list(config["mcp"]["servers"]) == ["trainer"]
+            assert config["mcp"]["servers"]["trainer"]["url"].startswith("http://127.0.0.1:")
+            assert config["mcp"]["servers"]["trainer"]["oauth"] is False
+            # execute stays denied: approved chess tools must be exposed directly.
+            assert config["mcp"]["servers"]["trainer"]["codemode"] is False
+    assert configurations[0]["mcp"]["servers"]["trainer"]["headers"] != configurations[1]["mcp"]["servers"]["trainer"]["headers"]

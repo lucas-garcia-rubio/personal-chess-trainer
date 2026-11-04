@@ -225,7 +225,7 @@ def test_unavailable_session_check_preserves_reads_and_can_recover_later(
 
 
 @pytest.mark.parametrize("invalid", ["missing", "directory", "identity"])
-def test_v1_http_session_validation_reconstructs_missing_or_incompatible_sessions(
+def test_v2_http_session_validation_reconstructs_missing_or_incompatible_sessions(
     migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock, invalid: str,
 ) -> None:
     from trainer.adapters.opencode import OpenCodeSessionClient
@@ -239,28 +239,33 @@ def test_v1_http_session_validation_reconstructs_missing_or_incompatible_session
         nonlocal sessions
         requests.append(request)
         assert request.headers["Authorization"].startswith("Basic ")
-        if request.url.path == "/session":
+        if request.url.path == "/api/session":
             assert request.method == "POST"
             sessions += 1
-            return httpx.Response(200, json={"id": f"ses_{sessions}"})
+            return httpx.Response(200, json={"data": {"id": f"ses_{sessions}"}})
+        if request.url.path == "/api/event":
+            payloads = [
+                {"type": "server.connected", "data": {}},
+                {"type": "session.text.ended", "data": {"sessionID": f"ses_{sessions}", "assistantMessageID": "a", "ordinal": 0, "text": "Develop a piece."}},
+                {"type": "session.execution.succeeded", "data": {"sessionID": f"ses_{sessions}"}},
+            ]
+            return httpx.Response(200, text="".join("data: " + json.dumps(p) + "\n\n" for p in payloads))
         if request.method == "GET":
-            assert request.url.path == "/session/ses_1"
+            assert request.url.path == "/api/session/ses_1"
             if lose_session and invalid == "missing":
                 return httpx.Response(404)
-            return httpx.Response(200, json={
+            return httpx.Response(200, json={"data": {
                 "id": "wrong" if lose_session and invalid == "identity" else "ses_1",
-                "directory": "/other" if lose_session and invalid == "directory" else "/private/trainer",
-            })
+                "agent": "trainer",
+                "location": {"directory": "/other" if lose_session and invalid == "directory" else "/private/trainer"},
+            }})
         if request.method == "DELETE":
             return httpx.Response(200, json=True)
-        assert request.url.path == f"/session/ses_{sessions}/message"
+        assert request.url.path == f"/api/session/ses_{sessions}/prompt"
         body = json.loads(request.content)
-        assert body["agent"] == "trainer" and "model" not in body
-        prompts.append(json.loads(body["parts"][0]["text"]))
-        return httpx.Response(200, json={
-            "info": {"role": "assistant", "sessionID": f"ses_{sessions}"},
-            "parts": [{"type": "text", "text": "Develop a piece."}],
-        })
+        assert "model" not in body
+        prompts.append(json.loads(body["text"]))
+        return httpx.Response(200, json={"data": {"id": "input"}})
 
     class HTTPRuntime(RecoverableOpenCode):
         adapter = OpenCodeSessionClient(httpx.Client(
@@ -298,7 +303,7 @@ def test_v1_http_session_validation_reconstructs_missing_or_incompatible_session
             "revision": saved["revision"], "confirmed": True,
         }).status_code == 204
         assert requests[-1].method == "DELETE"
-        assert requests[-1].url.path == "/session/ses_2"
+        assert requests[-1].url.path == "/api/session/ses_2"
 
 
 def test_session_rebuild_preserves_tool_evidence_and_demonstrated_moves_once(
