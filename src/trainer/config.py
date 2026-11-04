@@ -29,6 +29,7 @@ class OpenCodeSettings:
     executable: Path | None = None
     startup_timeout_seconds: int = 10
     http_timeout_seconds: int = 5
+    model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -165,8 +166,16 @@ def _load_opencode_settings(
     else:
         executable = None
 
+    model = opencode.get("model")
+    if model is not None:
+        if (not isinstance(model, str) or "/" not in model
+                or any(not part.strip() for part in model.strip().split("/", 1))):
+            raise ConfigError("Set [opencode] model to a provider/model reference.")
+        model = model.strip()
+
     return OpenCodeSettings(
         executable=executable,
+        model=model,
         startup_timeout_seconds=_opencode_option(
             opencode,
             "startup_timeout_seconds",

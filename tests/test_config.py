@@ -99,7 +99,7 @@ def test_load_settings_reads_and_resolves_the_opencode_path(tmp_path: Path) -> N
         '[lichess]\nusername = "test-player"\n\n'
         '[database]\npath = "data/trainer.db"\n\n'
         '[opencode]\npath = "tools/opencode"\nstartup_timeout_seconds = 12\n'
-        'http_timeout_seconds = 3\n',
+        'http_timeout_seconds = 3\nmodel = "openai/gpt-6.1-sol"\n',
         encoding="utf-8",
     )
 
@@ -109,6 +109,7 @@ def test_load_settings_reads_and_resolves_the_opencode_path(tmp_path: Path) -> N
         executable=tmp_path / "tools" / "opencode",
         startup_timeout_seconds=12,
         http_timeout_seconds=3,
+        model="openai/gpt-6.1-sol",
     )
 
 
@@ -129,6 +130,9 @@ def test_load_settings_reads_and_resolves_the_opencode_path(tmp_path: Path) -> N
         ("[engine]\ntimeout_seconds = 3601\n", "Set [engine] timeout_seconds between 1 and 3600"),
         ('[migration]\nflyway_path = 42\n', "Set [migration] flyway_path"),
         ('[opencode]\npath = 42\n', "Set [opencode] path"),
+        ('[opencode]\nmodel = 42\n', "Set [opencode] model"),
+        ('[opencode]\nmodel = "  "\n', "Set [opencode] model"),
+        ('[opencode]\nmodel = "gpt-6.1-sol"\n', "Set [opencode] model"),
         (
             '[opencode]\nstartup_timeout_seconds = 0\n',
             "Set [opencode] startup_timeout_seconds to a positive integer",

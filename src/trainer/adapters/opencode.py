@@ -199,6 +199,7 @@ class OpenCodeRuntime:
                         "mcp": {"servers": self._mcp},
                         "agents": {
                             "trainer": {
+                                **({"model": self._settings.model} if self._settings.model else {}),
                                 "description": "Discuss chess Positions with the Player.",
                                 "mode": "primary",
                                 "steps": 8,

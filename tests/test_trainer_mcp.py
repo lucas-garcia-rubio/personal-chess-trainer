@@ -142,9 +142,11 @@ def test_atomic_lines_recovery_order_and_restart(
         assert selected.status_code == 200
 
 
+@pytest.mark.parametrize("model", [None, "openai/gpt-6.1-sol"])
 def test_production_runtime_receives_only_approved_tools_and_ephemeral_mcp_configuration(
     migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock,
     monkeypatch: pytest.MonkeyPatch,
+    model: str | None,
 ) -> None:
     from trainer.adapters.opencode import OpenCodeRuntime
     from trainer.config import OpenCodeSettings
@@ -160,7 +162,7 @@ def test_production_runtime_receives_only_approved_tools_and_ephemeral_mcp_confi
     # An explicit executable reaches the process boundary without requiring OpenCode installed.
     from pathlib import Path
     for _ in range(2):
-        runtime = OpenCodeRuntime(OpenCodeSettings(executable=Path("/fake/opencode")))
+        runtime = OpenCodeRuntime(OpenCodeSettings(executable=Path("/fake/opencode"), model=model))
         with TestClient(create_app(settings, lichess_transport=lichess_mock.fail_on_request("offline"),
                                   trainer_runtime=runtime)) as client:
             assert client.get("/").status_code == 200
@@ -172,7 +174,10 @@ def test_production_runtime_receives_only_approved_tools_and_ephemeral_mcp_confi
                 {"action": "trainer_play_line", "resource": "*", "effect": "allow"},
                 {"action": "trainer_evaluate_position", "resource": "*", "effect": "allow"},
             ]
-            assert "model" not in config["agents"]["trainer"]
+            if model is None:
+                assert "model" not in config["agents"]["trainer"]
+            else:
+                assert config["agents"]["trainer"]["model"] == model
             assert config["agents"]["trainer"]["system"]
             assert config["policies"] == [
                 {"action": "mcp.use", "resource": "*", "effect": "deny"},

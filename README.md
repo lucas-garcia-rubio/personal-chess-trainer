@@ -42,6 +42,9 @@ flyway_path = "/caminho/para/flyway"
 path = "/caminho/para/opencode"
 startup_timeout_seconds = 10
 http_timeout_seconds = 5
+# Opcional: escolhe o modelo somente para o Trainer, sem alterar outras sessões.
+# Se omitido, usa o modelo padrão do OpenCode.
+model = "openai/gpt-6.1-sol"
 ```
 
 Caminhos relativos do banco e dos executáveis são resolvidos a partir da pasta
