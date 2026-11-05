@@ -30,7 +30,10 @@ with sqlite3.connect(database_path) as database:
             str(row[0])
             for row in database.execute("SELECT version FROM flyway_schema_history")
         }
-        for migration in sorted(migration_path.glob("V*__*.sql")):
+        for migration in sorted(
+            migration_path.glob("V*__*.sql"),
+            key=lambda path: int(path.name.split("__", 1)[0][1:]),
+        ):
             version = migration.name.split("__", maxsplit=1)[0].removeprefix("V")
             if version not in applied:
                 database.executescript(migration.read_text(encoding="utf-8"))

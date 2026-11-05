@@ -1,5 +1,6 @@
 """Reusable live application with controlled external services for browser tests."""
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 import socket
 from threading import Thread
 import time
@@ -47,6 +48,30 @@ def desktop_app(
         trainer_runtime=desktop_runtime,
     )
     browser_test_routes(app)
+    with serve_app(app) as url:
+        with httpx.Client(base_url=url, timeout=30, follow_redirects=True) as client:
+            client.post("/sync").raise_for_status()
+            client.post("/analyses/lichess/q7ZvsdUF/discussions", data={
+                "base_ply": "0", "message": "Explain this position at length.",
+                "initial_moves": '["e2e4", "e7e5", "g1f3"]',
+            }).raise_for_status()
+        yield url
+
+
+@pytest.fixture
+def home_app(result_games_settings: Settings, lichess_mock: LichessMock) -> Iterator[str]:
+    """Home browser contracts: real SQLite, no Sync, Game Source or Trainer calls."""
+    app = create_app(
+        result_games_settings,
+        lichess_transport=lichess_mock.fail_on_request("Home browser navigation is local"),
+    )
+    with serve_app(app) as url:
+        yield url
+
+
+@contextmanager
+def serve_app(app: FastAPI) -> Iterator[str]:
+    """Run an application on loopback and always stop its server thread."""
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         url = f"http://127.0.0.1:{listener.getsockname()[1]}"
@@ -59,40 +84,8 @@ def desktop_app(
                 if not thread.is_alive() or time.monotonic() > deadline:
                     pytest.fail("Browser application did not start")
                 time.sleep(0.01)
-            with httpx.Client(base_url=url, timeout=30, follow_redirects=True) as client:
-                client.post("/sync").raise_for_status()
-                client.post("/analyses/lichess/q7ZvsdUF/discussions", data={
-                    "base_ply": "0", "message": "Explain this position at length.",
-                    "initial_moves": '["e2e4", "e7e5", "g1f3"]',
-                }).raise_for_status()
             yield url
         finally:
             server.should_exit = True
             thread.join(timeout=10)
             assert not thread.is_alive(), "Browser server did not stop"
-
-
-@pytest.fixture
-def home_app(result_games_settings: Settings, lichess_mock: LichessMock) -> Iterator[str]:
-    """Home browser contracts: real SQLite, no Sync, Game Source or Trainer calls."""
-    app = create_app(
-        result_games_settings,
-        lichess_transport=lichess_mock.fail_on_request("Home browser navigation is local"),
-    )
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        url = f"http://127.0.0.1:{listener.getsockname()[1]}"
-        server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
-        thread = Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
-        thread.start()
-        try:
-            deadline = time.monotonic() + 10
-            while not server.started:
-                if not thread.is_alive() or time.monotonic() > deadline:
-                    pytest.fail("Home browser application did not start")
-                time.sleep(0.01)
-            yield url
-        finally:
-            server.should_exit = True
-            thread.join(timeout=10)
-            assert not thread.is_alive(), "Home browser server did not stop"

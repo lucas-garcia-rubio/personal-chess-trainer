@@ -38,7 +38,7 @@ def test_home_is_served_with_a_real_local_database(
     assert "Personal Chess Trainer" in response.text
     assert settings.database_path.is_file()
     with sqlite3.connect(settings.database_path) as database:
-        assert database.execute("PRAGMA user_version").fetchone() == (10,)
+        assert database.execute("PRAGMA user_version").fetchone() == (11,)
 
 
 def test_home_orders_games_by_their_operational_instant(
@@ -561,3 +561,24 @@ def test_category_mode_with_empty_library_keeps_tabs_and_no_restriction(
         assert not document.time_controls
         assert 'role="tab" aria-selected="true"' in response.text
         assert "Trocar o modo limpa a seleção de tempo" in response.text
+
+
+def test_home_progressively_enhances_filters_with_local_htmx(
+    result_games_settings: Settings, lichess_mock: LichessMock,
+) -> None:
+    app = create_app(
+        result_games_settings,
+        lichess_transport=lichess_mock.fail_on_request("Home filters stay local"),
+    )
+    with TestClient(app) as client:
+        response = client.get("/")
+        assert 'onchange=' not in response.text
+        assert 'hx-get="/"' in response.text
+        assert 'hx-trigger="change, submit"' in response.text
+        assert 'hx-push-url="true"' in response.text
+        assert 'type="submit">Aplicar filtros</button>' in response.text
+        assert '<script src="/static/htmx.min.js" defer></script>' in response.text
+        script = client.get("/static/htmx.min.js")
+        assert script.status_code == 200
+        assert "htmx" in script.text
+        assert "javascript" in script.headers["content-type"]

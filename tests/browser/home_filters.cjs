@@ -29,6 +29,15 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await assertGames([3, 2, 1, 0]);
     await toggle('Derrota', true, ['loss']);
     await assertGames([3, 1]);
+    // A filter request creates a history entry, not only an Analysis visit.
+    await page.goBack();
+    await page.waitForURL(url => !url.search);
+    await assertGames([3, 2, 1, 0]);
+    assert.equal(await checkbox('Derrota').isChecked(), false);
+    await page.goForward();
+    await page.waitForURL(url => url.searchParams.get('result') === 'loss');
+    await assertGames([3, 1]);
+    assert.equal(await checkbox('Derrota').isChecked(), true);
     await toggle('Empate', true, ['draw', 'loss']);
     await assertGames([3, 2, 1]);
     const filteredURL = page.url();
@@ -64,6 +73,19 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       assert.equal(await checkbox(name).isChecked(), false);
     }
     assert.deepEqual(errors, []);
+    // Progressive enhancement: ordinary GET submission works without JavaScript.
+    const ssrContext = await browser.newContext({ javaScriptEnabled: false });
+    try {
+      const ssr = await ssrContext.newPage();
+      await ssr.goto(process.argv[2]);
+      await ssr.getByRole('checkbox', { name: 'Derrota', exact: true }).check();
+      await ssr.getByRole('button', { name: 'Aplicar filtros' }).click();
+      await ssr.waitForURL(url => url.searchParams.get('result') === 'loss');
+      assert.equal(await ssr.getByRole('checkbox', { name: 'Derrota', exact: true }).isChecked(), true);
+      await ssr.getByText('2 de 4 partidas', { exact: true }).waitFor();
+    } finally {
+      await ssrContext.close();
+    }
   } finally {
     await browser.close();
   }

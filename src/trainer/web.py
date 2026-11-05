@@ -12,6 +12,7 @@ import chess
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
@@ -241,6 +242,7 @@ def create_web_app(
             storage.close()
 
     app = FastAPI(lifespan=lifespan)
+    app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
     app.post("/trainer/mcp")(mcp.handle)
 
     @app.get("/trainer/consent")

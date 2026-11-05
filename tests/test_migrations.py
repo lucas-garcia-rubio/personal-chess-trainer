@@ -273,12 +273,86 @@ def test_supported_flyway_distribution_migrates_empty_and_legacy_databases(
 
     for database_path in (empty_database, legacy_database):
         with sqlite3.connect(database_path) as database:
-            assert database.execute("PRAGMA user_version").fetchone() == (10,)
+            assert database.execute("PRAGMA user_version").fetchone() == (11,)
             assert database.execute(
                 "SELECT version FROM flyway_schema_history "
                 "WHERE success = 1 ORDER BY installed_rank"
-            ).fetchall() == [("1",), ("2",), ("3",), ("4",), ("5",), ("6",), ("7",), ("8",), ("9",)]
+            ).fetchall() == [("1",), ("2",), ("3",), ("4",), ("5",), ("6",), ("7",), ("8",), ("9",), ("10",)]
             primary_key = [
                 row[1] for row in database.execute("PRAGMA table_info(games)") if row[5]
             ]
         assert primary_key == ["origin", "origin_id"]
+
+
+@pytest.mark.parametrize(
+    ("predicate", "parameters", "index"),
+    [
+        ("result IN (?)", ("loss",), "games_result_played_at"),
+        ("time_control IN (?)", ("600+0",), "games_time_control_played_at"),
+        ("speed IN (?)", ("rapid",), "games_speed_played_at"),
+        ("result IN (?, ?) AND time_control IN (?, ?)",
+         ("loss", "draw", "600+0", "600+5"), ""),
+        ("result IN (?, ?) AND speed IN (?, ?)",
+         ("loss", "draw", "blitz", "rapid"), ""),
+    ],
+)
+def test_home_filter_queries_search_indexes_after_migration(
+    tmp_path: Path,
+    predicate: str, parameters: tuple[str, ...], index: str,
+) -> None:
+    """The versioned SQL supports both standalone and combined Home filters."""
+    database_path = tmp_path / "indexed.db"
+    flyway = Path(__file__).parent / "flyway_stub.py"
+    FlywayMigrator(MigrationSettings(executable=flyway)).migrate(database_path)
+    with sqlite3.connect(database_path) as database:
+        plan = " ".join(row[3] for row in database.execute(
+            "EXPLAIN QUERY PLAN SELECT origin, origin_id, opponent, result, "
+            "time_control, critical_count FROM games WHERE " + predicate
+            + " ORDER BY played_at DESC", parameters,
+        ))
+    assert "SEARCH games USING INDEX games_" in plan
+    if index:
+        assert index in plan
+        assert "USE TEMP B-TREE" not in plan
+
+
+def test_home_filter_index_upgrade_preserves_existing_games_and_is_repeatable(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "upgrade.db"
+    _legacy_database(database_path)
+    with sqlite3.connect(database_path) as database:
+        database.execute(
+            "INSERT INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("existing", '{"players":{"white":{"user":{"name":"Player"}},'
+             '"black":{"user":{"name":"Opponent"}}},'
+             '"clock":{"initial":600,"increment":0}}',
+             '{"critical_moments":[]}', 1700000000000, "Opponent", "loss", "rapid", 0),
+        )
+        migrations = Path(__file__).parents[1] / "src" / "trainer" / "migrations"
+        for version in range(2, 10):
+            migration = next(migrations.glob(f"V{version}__*.sql"))
+            database.executescript(migration.read_text(encoding="utf-8"))
+        database.execute("CREATE TABLE flyway_schema_history (version TEXT PRIMARY KEY)")
+        database.executemany(
+            "INSERT INTO flyway_schema_history VALUES (?)",
+            [(str(version),) for version in range(1, 10)],
+        )
+        before = database.execute("SELECT * FROM games").fetchall()
+
+    flyway = Path(__file__).parent / "flyway_stub.py"
+    migrator = FlywayMigrator(MigrationSettings(executable=flyway))
+    migrator.migrate(database_path)
+    migrator.migrate(database_path)
+
+    with sqlite3.connect(database_path) as database:
+        assert database.execute("SELECT * FROM games").fetchall() == before
+        assert database.execute("PRAGMA user_version").fetchone() == (11,)
+        assert database.execute(
+            "SELECT version FROM flyway_schema_history ORDER BY rowid"
+        ).fetchall() == [(str(version),) for version in range(1, 11)]
+        assert {
+            row[1] for row in database.execute("PRAGMA index_list(games)")
+        } >= {
+            "games_result_played_at", "games_time_control_played_at", "games_speed_played_at",
+        }
