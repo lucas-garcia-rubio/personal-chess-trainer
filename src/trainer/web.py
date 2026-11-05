@@ -2,15 +2,17 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from fractions import Fraction
 import json
 from pathlib import Path
 from typing import TypedDict, cast
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
 import chess
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
@@ -240,6 +242,7 @@ def create_web_app(
             storage.close()
 
     app = FastAPI(lifespan=lifespan)
+    app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
     app.post("/trainer/mcp")(mcp.handle)
 
     @app.get("/trainer/consent")
@@ -253,10 +256,35 @@ def create_web_app(
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request) -> Response:
+        results = tuple(dict.fromkeys(
+            value for value in request.query_params.getlist("result")
+            if value in {"win", "draw", "loss"}
+        ))
+        time_mode = "category" if request.query_params.get("time_mode") == "category" else "exact"
+        inactive_parameter = "time_control" if time_mode == "category" else "category"
+        if inactive_parameter in request.query_params:
+            # Canonicalize mixed direct links as well as UI transitions: inactive
+            # criteria must never survive in the URL or the Analysis return link.
+            query = urlencode([(key, value) for key, value in request.query_params.multi_items()
+                               if key != inactive_parameter])
+            return RedirectResponse("/" + (f"?{query}" if query else ""), status_code=303)
+        time_controls = (tuple(dict.fromkeys(request.query_params.getlist("time_control")))
+                         if time_mode == "exact" else ())
+        categories = (tuple(dict.fromkeys(request.query_params.getlist("category")))
+                      if time_mode == "category" else ())
+        listing = storage.list_games(results, time_controls, categories)
         return _templates.TemplateResponse(
             request,
             "home.html",
-            {"games": storage.list_games()},
+            {"games": listing.games, "listing": listing, "results": results,
+             "time_controls": time_controls, "categories": categories, "time_mode": time_mode,
+             "category_options": [(value, "Desconhecida" if value.lower() in {"", "unknown", "?", "-"}
+                                   else value[0].upper() + value[1:]) for value in listing.categories],
+             "mode_urls": {mode: "/?" + urlencode(
+                 [("time_mode", mode)] + [("result", value) for value in results]
+             ) for mode in ("category", "exact")},
+             "control_options": [(value, _time_control_label(value)) for value in listing.time_controls],
+             "home_url": "/" + (f"?{request.url.query}" if request.url.query else "")},
         )
 
     def render_settings(request: Request, error: str | None = None,
@@ -339,11 +367,15 @@ def create_web_app(
                 documents[str(discussion.base_ply)] = document
                 views.append((discussion.base_ply, discussion_view(document,
                     storage.discussion_requests(origin, origin_id, discussion.base_ply), attempts)))
+        home_url = request.query_params.get("return_to", "/")
+        if home_url != "/" and not home_url.startswith("/?"):
+            home_url = "/"
         return _templates.TemplateResponse(
             request,
             "analysis.html",
             {
                 "analysis": stored_analysis,
+                "home_url": home_url,
                 "origin": origin,
                 "origin_id": origin_id,
                 "navigation": _build_analysis_navigation(
@@ -623,3 +655,21 @@ def create_web_app(
         return render_analysis(request, "lichess", source_id)
 
     return app
+
+
+def _time_control_label(value: str) -> str:
+    if value in {"", "-", "?", "unknown"}:
+        return "Desconhecido"
+    parts = value.split("+")
+    if len(parts) == 2 and all(part.isascii() and part.isdecimal() for part in parts):
+        seconds, increment = map(int, parts)
+        minutes, remainder = divmod(seconds, 60)
+        if remainder == 0:
+            return f"{minutes}+{increment}"
+        # Fractions of a minute are exact, never rounded (e.g. 61/60).
+        fraction = Fraction(seconds, 60)
+        if seconds % 3 == 0:
+            decimal_minutes = f"{minutes}.{remainder * 100 // 60:02d}".rstrip("0")
+            return f"{decimal_minutes}+{increment}"
+        return f"{fraction}+{increment}"
+    return value

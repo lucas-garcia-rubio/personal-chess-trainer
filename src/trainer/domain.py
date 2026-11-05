@@ -152,6 +152,18 @@ class GameSummary:
 
 
 @dataclass(frozen=True)
+class GameListing:
+    games: list[GameSummary]
+    total: int
+    time_controls: tuple[str, ...] = ()
+    categories: tuple[str, ...] = ()
+
+    @property
+    def filtered_total(self) -> int:
+        return len(self.games)
+
+
+@dataclass(frozen=True)
 class DiscussionMessage:
     author: Literal["player", "trainer"]
     body: str

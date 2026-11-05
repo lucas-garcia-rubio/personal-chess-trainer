@@ -20,6 +20,7 @@ from trainer.domain import (
     EvaluatorProvenance,
     GameMetadata,
     GameSummary,
+    GameListing,
     EvaluationScore,
     PositionEvaluation,
     ScoreKind,
@@ -246,17 +247,36 @@ class SQLiteStorage:
         ).fetchone()
         return None if row is None else cast(int | None, row[0])
 
-    def list_games(self) -> list[GameSummary]:
+    def list_games(
+        self, results: tuple[str, ...] = (), time_controls: tuple[str, ...] = (),
+        categories: tuple[str, ...] = (),
+    ) -> GameListing:
+        predicates = []
+        parameters: list[str] = []
+        for column, values in (("result", results), ("time_control", time_controls), ("speed", categories)):
+            if values:
+                predicates.append(column + " IN (" + ",".join("?" for _ in values) + ")")
+                parameters.extend(values)
+        predicate = " WHERE " + " AND ".join(predicates) if predicates else ""
         rows = self._connection.execute(
-            """
-            SELECT origin, origin_id, opponent, result, time_control, critical_count
-            FROM games ORDER BY played_at DESC
-            """
+            "SELECT origin, origin_id, opponent, result, time_control, critical_count "
+            "FROM games" + predicate + " ORDER BY played_at DESC",
+            parameters,
         ).fetchall()
-        return [
-            GameSummary(*cast(tuple[str, str, str, str, str, int], row))
-            for row in rows
-        ]
+        total = self._connection.execute("SELECT COUNT(*) FROM games").fetchone()[0]
+        return GameListing(
+            games=[
+                GameSummary(*cast(tuple[str, str, str, str, str, int], row))
+                for row in rows
+            ],
+            total=total,
+            time_controls=tuple(row[0] for row in self._connection.execute(
+                "SELECT DISTINCT time_control FROM games ORDER BY time_control"
+            )),
+            categories=tuple(row[0] for row in self._connection.execute(
+                "SELECT DISTINCT speed FROM games ORDER BY speed"
+            )),
+        )
 
     def get_analysis(self, origin: str, origin_id: str) -> Analysis | None:
         row = self._connection.execute(

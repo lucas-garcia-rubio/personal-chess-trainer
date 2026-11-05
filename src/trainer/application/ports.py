@@ -9,7 +9,7 @@ from trainer.domain import (
     DiscussionMessage,
     EvaluationRun,
     GameMetadata,
-    GameSummary,
+    GameListing,
     VariationMove,
 )
 
@@ -179,7 +179,10 @@ class LocalStorage(Protocol):
 
     def latest_played_at(self, origin: str) -> int | None: ...
 
-    def list_games(self) -> list[GameSummary]: ...
+    def list_games(
+        self, results: tuple[str, ...] = (), time_controls: tuple[str, ...] = (),
+        categories: tuple[str, ...] = (),
+    ) -> GameListing: ...
 
     def get_analysis(self, origin: str, origin_id: str) -> Analysis | None: ...
 

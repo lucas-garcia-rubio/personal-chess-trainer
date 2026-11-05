@@ -44,7 +44,10 @@ def migrated_settings(tmp_path: Path) -> Callable[[str], Settings]:
                 Path(__file__).parents[1] / "src" / "trainer" / "migrations"
             )
             with sqlite3.connect(database_path) as database:
-                for migration in sorted(migration_directory.glob("V*__*.sql")):
+                for migration in sorted(
+                    migration_directory.glob("V*__*.sql"),
+                    key=lambda path: int(path.name.split("__", 1)[0][1:]),
+                ):
                     database.executescript(migration.read_text(encoding="utf-8"))
         return Settings(lichess_username=username, database_path=database_path)
 

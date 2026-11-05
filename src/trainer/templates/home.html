@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="/static/htmx.min.js" defer></script>
     <title>Personal Chess Trainer</title>
     <style>
       :root {
@@ -89,6 +90,13 @@
         color: #b7aa98;
         font-size: 0.8rem;
       }
+      fieldset { display: flex; flex-wrap: wrap; gap: 1rem; margin: 0 0 1.25rem; padding: 1rem; border: 1px solid #4f493f; border-radius: 0.4rem; }
+      legend { color: #b7aa98; padding: 0 0.4rem; }
+      fieldset label { display: inline-flex; gap: 0.4rem; align-items: center; cursor: pointer; }
+      input[type="checkbox"] { accent-color: #dcb86b; width: 1.1rem; height: 1.1rem; }
+      .time-tabs { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }
+      .time-tabs [aria-selected="true"] { background: #dcb86b; border-color: #dcb86b; color: #171512; }
+      .time-mode-hint { color: #b7aa98; font-size: 0.85rem; }
       .game-list { display: grid; gap: 0.75rem; margin: 0; padding: 0; list-style: none; }
       .game-link {
         display: grid;
@@ -154,13 +162,57 @@
       <section aria-labelledby="games-title">
         <header class="library-heading">
           <h2 id="games-title">Your games</h2>
-          <span class="game-count">{{ games | length }} {{ 'game' if games | length == 1 else 'games' }}</span>
+          <span class="game-count">{{ listing.filtered_total }} de {{ listing.total }} partidas</span>
         </header>
+        <form action="/" method="get" aria-label="Filtros de partidas" hx-get="/" hx-trigger="change, submit"
+              hx-target="main" hx-select="main" hx-swap="outerHTML"
+              hx-push-url="true" hx-sync="this:replace">
+          <fieldset>
+            <legend>Resultado do Player</legend>
+            {% for value, label in [('win', 'Vitória'), ('draw', 'Empate'), ('loss', 'Derrota')] %}
+              <label>
+                <input type="checkbox" name="result" value="{{ value }}"{% if value in results %} checked{% endif %}>
+                {{ label }}
+              </label>
+            {% endfor %}
+          </fieldset>
+          <nav class="time-tabs" role="tablist" aria-label="Modo de tempo">
+            {% for mode, label in [('category', 'Categoria'), ('exact', 'Controle exato')] %}
+              <a class="button" role="tab" aria-selected="{{ 'true' if time_mode == mode else 'false' }}"
+                 href="{{ home_url if time_mode == mode else mode_urls[mode] }}">{{ label }}</a>
+            {% endfor %}
+          </nav>
+          <p class="time-mode-hint">Trocar o modo limpa a seleção de tempo</p>
+          <input type="hidden" name="time_mode" value="{{ time_mode }}">
+          {% if time_mode == 'category' %}
+          <fieldset>
+            <legend>Categoria de Ritmo</legend>
+            {% for value, label in category_options %}
+              <label>
+                <input type="checkbox" name="category" value="{{ value }}"{% if value in categories %} checked{% endif %}>
+                {{ label }}
+              </label>
+            {% endfor %}
+          </fieldset>
+          {% else %}
+          <fieldset>
+            <legend>Controle de Tempo exato</legend>
+            {% for value, label in control_options %}
+              <label>
+                <input type="checkbox" name="time_control" value="{{ value }}"{% if value in time_controls %} checked{% endif %}>
+                {{ label }}
+              </label>
+            {% endfor %}
+          </fieldset>
+          {% endif %}
+          <noscript><button class="button" type="submit">Aplicar filtros</button></noscript>
+        </form>
+        {% if results or time_controls or categories %}<p><a href="/">Limpar filtros</a></p>{% endif %}
         {% if games %}
           <ul class="game-list">
             {% for game in games %}
               <li>
-                <a class="game-link" href="/analyses/{{ game.origin }}/{{ game.origin_id }}">
+                <a class="game-link" href="/analyses/{{ game.origin }}/{{ game.origin_id }}{% if results or time_controls or categories or time_mode == 'category' %}?return_to={{ home_url | urlencode }}{% endif %}">
                   <span>
                     <span class="game-opponent">vs {{ game.opponent }}</span>
                     <span class="game-meta">{{ game.result }} · {{ game.time_control }} · {{ game.critical_count }} Critical Moments</span>
@@ -175,9 +227,14 @@
             <span class="empty-mark" aria-hidden="true">
               <svg viewBox="0 0 32 32" focusable="false"><path d="M7 4h4v4h3V4h4v4h3V4h4v9l-4 3v8h3v4H8v-4h3v-8l-4-3z"/></svg>
             </span>
+            {% if results or time_controls or categories %}
+            <h3>Nenhuma partida encontrada</h3>
+            <p>Ajuste ou limpe os filtros para ver outras partidas.</p>
+            {% else %}
             <h3>Your next lesson starts here.</h3>
             <p>Your games will appear here after the first sync.</p>
             <p>Synchronize your games from Lichess or import a PGN to start exploring your Analysis.</p>
+            {% endif %}
           </div>
         {% endif %}
       </section>
