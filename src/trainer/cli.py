@@ -21,7 +21,7 @@ def _parser() -> argparse.ArgumentParser:
         help="configuration file (default: config.toml)",
     )
     serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--port", type=int, default=8765)
     return parser
 
 

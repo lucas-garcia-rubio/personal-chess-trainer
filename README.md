@@ -58,7 +58,7 @@ Trainer. Inicie a aplicação com:
 trainer serve
 ```
 
-A Home estará disponível em <http://127.0.0.1:8000>.
+A Home estará disponível em <http://127.0.0.1:8765>.
 
 O botão **Settings** na Home permite escolher o modelo do Trainer. As opções vêm
 de `opencode models`, usando o executável configurado em `[opencode] path` ou no

@@ -45,21 +45,27 @@ def test_serve_explains_how_to_create_missing_configuration(
     assert "Create it with [lichess] username and [database] path" in result.stderr
 
 
-def test_serve_starts_the_configured_application(tmp_path: Path) -> None:
+@pytest.mark.parametrize("use_default_port", [True, False])
+def test_serve_starts_the_configured_application(
+    tmp_path: Path, use_default_port: bool,
+) -> None:
     (tmp_path / "config.toml").write_text(
         _config(tmp_path),
         encoding="utf-8",
     )
-    with socket.socket() as reservation:
-        reservation.bind(("127.0.0.1", 0))
-        port = reservation.getsockname()[1]
+    port = 8765
+    port_arguments: list[str] = []
+    if not use_default_port:
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            port = reservation.getsockname()[1]
+        port_arguments = ["--port", str(port)]
 
     process = subprocess.Popen(
         [
             str(Path(sys.executable).with_name("trainer")),
             "serve",
-            "--port",
-            str(port),
+            *port_arguments,
         ],
         cwd=tmp_path,
         stdout=subprocess.PIPE,
