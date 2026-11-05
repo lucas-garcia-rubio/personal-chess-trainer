@@ -170,13 +170,22 @@
               </label>
             {% endfor %}
           </fieldset>
+          <fieldset>
+            <legend>Controle de Tempo exato</legend>
+            {% for value, label in control_options %}
+              <label>
+                <input type="checkbox" name="time_control" value="{{ value }}"{% if value in time_controls %} checked{% endif %}>
+                {{ label }}
+              </label>
+            {% endfor %}
+          </fieldset>
         </form>
-        {% if results %}<p><a href="/">Limpar filtros</a></p>{% endif %}
+        {% if results or time_controls %}<p><a href="/">Limpar filtros</a></p>{% endif %}
         {% if games %}
           <ul class="game-list">
             {% for game in games %}
               <li>
-                <a class="game-link" href="/analyses/{{ game.origin }}/{{ game.origin_id }}{% if results %}?return_to={{ home_url | urlencode }}{% endif %}">
+                <a class="game-link" href="/analyses/{{ game.origin }}/{{ game.origin_id }}{% if results or time_controls %}?return_to={{ home_url | urlencode }}{% endif %}">
                   <span>
                     <span class="game-opponent">vs {{ game.opponent }}</span>
                     <span class="game-meta">{{ game.result }} · {{ game.time_control }} · {{ game.critical_count }} Critical Moments</span>
@@ -191,7 +200,7 @@
             <span class="empty-mark" aria-hidden="true">
               <svg viewBox="0 0 32 32" focusable="false"><path d="M7 4h4v4h3V4h4v4h3V4h4v9l-4 3v8h3v4H8v-4h3v-8l-4-3z"/></svg>
             </span>
-            {% if results %}
+            {% if results or time_controls %}
             <h3>Nenhuma partida encontrada</h3>
             <p>Ajuste ou limpe os filtros para ver outras partidas.</p>
             {% else %}

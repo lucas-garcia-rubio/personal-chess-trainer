@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from fractions import Fraction
 import json
 from pathlib import Path
 from typing import TypedDict, cast
@@ -257,11 +258,14 @@ def create_web_app(
             value for value in request.query_params.getlist("result")
             if value in {"win", "draw", "loss"}
         ))
-        listing = storage.list_games(results)
+        time_controls = tuple(dict.fromkeys(request.query_params.getlist("time_control")))
+        listing = storage.list_games(results, time_controls)
         return _templates.TemplateResponse(
             request,
             "home.html",
             {"games": listing.games, "listing": listing, "results": results,
+             "time_controls": time_controls,
+             "control_options": [(value, _time_control_label(value)) for value in listing.time_controls],
              "home_url": "/" + (f"?{request.url.query}" if request.url.query else "")},
         )
 
@@ -633,3 +637,21 @@ def create_web_app(
         return render_analysis(request, "lichess", source_id)
 
     return app
+
+
+def _time_control_label(value: str) -> str:
+    if value in {"", "-", "?", "unknown"}:
+        return "Desconhecido"
+    parts = value.split("+")
+    if len(parts) == 2 and all(part.isascii() and part.isdecimal() for part in parts):
+        seconds, increment = map(int, parts)
+        minutes, remainder = divmod(seconds, 60)
+        if remainder == 0:
+            return f"{minutes}+{increment}"
+        # Fractions of a minute are exact, never rounded (e.g. 61/60).
+        fraction = Fraction(seconds, 60)
+        if seconds % 3 == 0:
+            decimal_minutes = f"{minutes}.{remainder * 100 // 60:02d}".rstrip("0")
+            return f"{decimal_minutes}+{increment}"
+        return f"{fraction}+{increment}"
+    return value

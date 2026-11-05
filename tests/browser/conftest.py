@@ -12,6 +12,7 @@ import uvicorn
 from lichess_mock import LichessMock
 from test_trainer_response import FakeOpenCode
 from test_home import result_games_settings as result_games_settings
+from test_home import time_games_settings as time_games_settings
 from trainer.bootstrap import create_app
 from trainer.config import Settings
 

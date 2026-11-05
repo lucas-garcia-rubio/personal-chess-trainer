@@ -148,6 +148,9 @@ class HomeDocument(HTMLParser):
     def __init__(self, html: str) -> None:
         super().__init__()
         self.checked_results: set[str] = set()
+        self.time_controls: dict[str, str] = {}
+        self.checked_time_controls: set[str] = set()
+        self._control: str | None = None
         self.analysis_links: list[str] = []
         self.clear_link: str | None = None
         self._link_href: str | None = None
@@ -157,6 +160,11 @@ class HomeDocument(HTMLParser):
         attributes = dict(attrs)
         if tag == "input" and attributes.get("name") == "result" and "checked" in attributes:
             self.checked_results.add(attributes.get("value") or "")
+        if tag == "input" and attributes.get("name") == "time_control":
+            self._control = attributes.get("value") or ""
+            self.time_controls[self._control] = ""
+            if "checked" in attributes:
+                self.checked_time_controls.add(self._control)
         if tag == "a":
             href = attributes.get("href") or ""
             if href.startswith("/analyses/"):
@@ -164,10 +172,14 @@ class HomeDocument(HTMLParser):
             self._link_href = href
 
     def handle_data(self, data: str) -> None:
+        if self._control is not None:
+            self.time_controls[self._control] += data.strip()
         if data.strip() == "Limpar filtros":
             self.clear_link = self._link_href
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "label":
+            self._control = None
         if tag == "a":
             self._link_href = None
 
@@ -310,3 +322,102 @@ def test_analysis_home_link_returns_to_filtered_selection(
         # A supplied return URL can never turn the Home link into an external link.
         unsafe = client.get("/analyses/lichess/result-3?return_to=https://example.com/")
         assert '<a href="/">← Home</a>' in unsafe.text
+
+
+@pytest.fixture
+def time_games_settings(migrated_settings: Callable[[str], Settings]) -> Settings:
+    settings = migrated_settings("Player")
+    storage = SQLiteStorage(settings.database_path)
+    try:
+        for index, (control, result) in enumerate([
+            ("600+0", "loss"), ("600+5", "draw"), ("600+0", "win"),
+            ("180+0", "loss"), ("600+5", "loss"), ("600+0", "draw"),
+            ("-", "win"), ("?", "draw"), ("", "loss"), ("unknown", "draw"),
+            ("40/7200:3600", "draw"), ("30+1", "win"), ("61+2", "loss"),
+        ]):
+            metadata, analysis = _stored_game(
+                origin_id=f"time-{index}", opponent=f"Clock Opponent {index}",
+                played_at=(index + 1) * 1000, created_at=(20 - index) * 1000,
+            )
+            metadata = replace(metadata, time_control=control,
+                               canonical_document=json.dumps([chess.STARTING_FEN, "e4 e5"]))
+            storage.save_game("raw", metadata, replace(analysis, time_control=control, result=result))
+    finally:
+        storage.close()
+    return settings
+
+
+def test_home_combines_exact_controls_with_player_results(
+    time_games_settings: Settings, lichess_mock: LichessMock,
+) -> None:
+    app = create_app(time_games_settings, lichess_transport=lichess_mock.fail_on_request("Home is local"))
+    with TestClient(app) as client:
+        response = client.get("/?time_control=600%2B0&time_control=600%2B5&result=loss&result=draw")
+    document = HomeDocument(response.text)
+    assert document.checked_time_controls == {"600+0", "600+5"}
+    assert document.checked_results == {"loss", "draw"}
+    assert [link.split("?")[0] for link in document.analysis_links] == [
+        f"/analyses/lichess/time-{index}" for index in [5, 4, 1, 0]
+    ]
+    assert "4 de 13 partidas" in response.text
+    assert document.time_controls["600+0"] == "10+0"
+    assert document.time_controls["600+5"] == "10+5"
+
+
+@pytest.mark.parametrize(("controls", "results", "expected"), [
+    ([], [], list(reversed(range(13)))),
+    (["600+0", "600+5"], [], [5, 4, 2, 1, 0]),
+    ([], ["loss"], [12, 8, 4, 3, 0]),
+    (["600+5"], ["win"], []),
+    (["-"], [], [6]), (["?"], [], [7]), ([""], [], [8]),
+    (["unknown"], [], [9]), (["40/7200:3600"], [], [10]),
+    (["600+0", "600+0"], ["draw"], [5]),
+])
+def test_home_restores_controls_options_and_empty_searches(
+    time_games_settings: Settings, lichess_mock: LichessMock,
+    controls: list[str], results: list[str], expected: list[int],
+) -> None:
+    from urllib.parse import urlencode
+    app = create_app(time_games_settings, lichess_transport=lichess_mock.fail_on_request("Home is local"))
+    with TestClient(app) as client:
+        response = client.get("/?" + urlencode({"time_control": controls, "result": results}, doseq=True))
+        document = HomeDocument(response.text)
+        assert document.checked_time_controls == set(controls)
+        assert document.checked_results == set(results)
+        assert [link.split("?")[0] for link in document.analysis_links] == [
+            f"/analyses/lichess/time-{index}" for index in expected
+        ]
+        assert f"{len(expected)} de 13 partidas" in response.text
+        assert document.time_controls == {
+            "600+0": "10+0", "600+5": "10+5", "180+0": "3+0",
+            "-": "Desconhecido", "?": "Desconhecido", "": "Desconhecido",
+            "unknown": "Desconhecido", "40/7200:3600": "40/7200:3600",
+            "30+1": "0.5+1", "61+2": "61/60+2",
+        }
+        assert ("Nenhuma partida encontrada" in response.text) == (not expected)
+        assert bool(document.clear_link) == bool(controls or results)
+        if controls or results:
+            cleared = HomeDocument(client.get(document.clear_link or "/").text)
+            assert len(cleared.analysis_links) == 13
+            assert not cleared.checked_results
+            assert not cleared.checked_time_controls
+        if document.analysis_links:
+            analysis = client.get(document.analysis_links[0])
+            assert analysis.status_code == 200
+
+
+def test_home_formats_large_controls_without_losing_seconds(
+    migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock,
+) -> None:
+    settings = migrated_settings("Player")
+    storage = SQLiteStorage(settings.database_path)
+    try:
+        metadata, analysis = _stored_game(origin_id="large", opponent="Large clock",
+                                         played_at=1000, created_at=1000)
+        storage.save_game("raw", replace(metadata, time_control="600000000000000003+5"), analysis)
+    finally:
+        storage.close()
+    app = create_app(settings, lichess_transport=lichess_mock.fail_on_request("Home is local"))
+    with TestClient(app) as client:
+        document = HomeDocument(client.get("/").text)
+        assert document.time_controls["600000000000000003+5"] == "10000000000000000.05+5"

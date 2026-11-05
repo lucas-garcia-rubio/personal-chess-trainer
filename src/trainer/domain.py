@@ -155,6 +155,7 @@ class GameSummary:
 class GameListing:
     games: list[GameSummary]
     total: int
+    time_controls: tuple[str, ...] = ()
 
     @property
     def filtered_total(self) -> int:

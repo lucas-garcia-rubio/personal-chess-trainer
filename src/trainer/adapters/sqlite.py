@@ -247,14 +247,20 @@ class SQLiteStorage:
         ).fetchone()
         return None if row is None else cast(int | None, row[0])
 
-    def list_games(self, results: tuple[str, ...] = ()) -> GameListing:
-        predicate = ""
-        if results:
-            predicate = " WHERE result IN (" + ",".join("?" for _ in results) + ")"
+    def list_games(
+        self, results: tuple[str, ...] = (), time_controls: tuple[str, ...] = (),
+    ) -> GameListing:
+        predicates = []
+        parameters: list[str] = []
+        for column, values in (("result", results), ("time_control", time_controls)):
+            if values:
+                predicates.append(column + " IN (" + ",".join("?" for _ in values) + ")")
+                parameters.extend(values)
+        predicate = " WHERE " + " AND ".join(predicates) if predicates else ""
         rows = self._connection.execute(
             "SELECT origin, origin_id, opponent, result, time_control, critical_count "
             "FROM games" + predicate + " ORDER BY played_at DESC",
-            results,
+            parameters,
         ).fetchall()
         total = self._connection.execute("SELECT COUNT(*) FROM games").fetchone()[0]
         return GameListing(
@@ -263,6 +269,9 @@ class SQLiteStorage:
                 for row in rows
             ],
             total=total,
+            time_controls=tuple(row[0] for row in self._connection.execute(
+                "SELECT DISTINCT time_control FROM games ORDER BY time_control"
+            )),
         )
 
     def get_analysis(self, origin: str, origin_id: str) -> Analysis | None:
