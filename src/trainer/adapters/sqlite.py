@@ -20,6 +20,7 @@ from trainer.domain import (
     EvaluatorProvenance,
     GameMetadata,
     GameSummary,
+    GameListing,
     EvaluationScore,
     PositionEvaluation,
     ScoreKind,
@@ -246,17 +247,23 @@ class SQLiteStorage:
         ).fetchone()
         return None if row is None else cast(int | None, row[0])
 
-    def list_games(self) -> list[GameSummary]:
+    def list_games(self, results: tuple[str, ...] = ()) -> GameListing:
+        predicate = ""
+        if results:
+            predicate = " WHERE result IN (" + ",".join("?" for _ in results) + ")"
         rows = self._connection.execute(
-            """
-            SELECT origin, origin_id, opponent, result, time_control, critical_count
-            FROM games ORDER BY played_at DESC
-            """
+            "SELECT origin, origin_id, opponent, result, time_control, critical_count "
+            "FROM games" + predicate + " ORDER BY played_at DESC",
+            results,
         ).fetchall()
-        return [
-            GameSummary(*cast(tuple[str, str, str, str, str, int], row))
-            for row in rows
-        ]
+        total = self._connection.execute("SELECT COUNT(*) FROM games").fetchone()[0]
+        return GameListing(
+            games=[
+                GameSummary(*cast(tuple[str, str, str, str, str, int], row))
+                for row in rows
+            ],
+            total=total,
+        )
 
     def get_analysis(self, origin: str, origin_id: str) -> Analysis | None:
         row = self._connection.execute(

@@ -11,6 +11,7 @@ import uvicorn
 
 from lichess_mock import LichessMock
 from test_trainer_response import FakeOpenCode
+from test_home import result_games_settings as result_games_settings
 from trainer.bootstrap import create_app
 from trainer.config import Settings
 
@@ -68,3 +69,29 @@ def desktop_app(
             server.should_exit = True
             thread.join(timeout=10)
             assert not thread.is_alive(), "Browser server did not stop"
+
+
+@pytest.fixture
+def home_app(result_games_settings: Settings, lichess_mock: LichessMock) -> Iterator[str]:
+    """Home browser contracts: real SQLite, no Sync, Game Source or Trainer calls."""
+    app = create_app(
+        result_games_settings,
+        lichess_transport=lichess_mock.fail_on_request("Home browser navigation is local"),
+    )
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        url = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
+        thread = Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 10
+            while not server.started:
+                if not thread.is_alive() or time.monotonic() > deadline:
+                    pytest.fail("Home browser application did not start")
+                time.sleep(0.01)
+            yield url
+        finally:
+            server.should_exit = True
+            thread.join(timeout=10)
+            assert not thread.is_alive(), "Home browser server did not stop"

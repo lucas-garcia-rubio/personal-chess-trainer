@@ -253,10 +253,16 @@ def create_web_app(
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request) -> Response:
+        results = tuple(dict.fromkeys(
+            value for value in request.query_params.getlist("result")
+            if value in {"win", "draw", "loss"}
+        ))
+        listing = storage.list_games(results)
         return _templates.TemplateResponse(
             request,
             "home.html",
-            {"games": storage.list_games()},
+            {"games": listing.games, "listing": listing, "results": results,
+             "home_url": "/" + (f"?{request.url.query}" if request.url.query else "")},
         )
 
     def render_settings(request: Request, error: str | None = None,
@@ -339,11 +345,15 @@ def create_web_app(
                 documents[str(discussion.base_ply)] = document
                 views.append((discussion.base_ply, discussion_view(document,
                     storage.discussion_requests(origin, origin_id, discussion.base_ply), attempts)))
+        home_url = request.query_params.get("return_to", "/")
+        if home_url != "/" and not home_url.startswith("/?"):
+            home_url = "/"
         return _templates.TemplateResponse(
             request,
             "analysis.html",
             {
                 "analysis": stored_analysis,
+                "home_url": home_url,
                 "origin": origin,
                 "origin_id": origin_id,
                 "navigation": _build_analysis_navigation(
