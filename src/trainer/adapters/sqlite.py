@@ -36,6 +36,19 @@ class SQLiteStorage:
         self._connection.execute("PRAGMA busy_timeout = 5000")
         self._connection.execute("PRAGMA foreign_keys = ON")
 
+    def trainer_model(self) -> str | None:
+        with self._discussion_lock:
+            row = self._connection.execute(
+                "SELECT model FROM trainer_preferences WHERE id = 1",
+            ).fetchone()
+            return cast(str | None, row[0])
+
+    def set_trainer_model(self, model: str) -> None:
+        with self._discussion_lock, self._connection:
+            self._connection.execute(
+                "UPDATE trainer_preferences SET model = ? WHERE id = 1", (model,),
+            )
+
     def response_request(self, request_id: int) -> str:
         with self._discussion_lock:
             row = self._connection.execute(

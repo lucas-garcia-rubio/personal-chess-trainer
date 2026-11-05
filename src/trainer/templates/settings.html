@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Settings · Personal Chess Trainer</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; background: #171512; color: #f3eee4; }
+      * { box-sizing: border-box; }
+      main { width: min(40rem, calc(100% - 2rem)); margin: 2rem auto; }
+      a { color: #dcb86b; }
+      form { display: grid; gap: 1rem; padding: 1.5rem; background: #24201b; border: 1px solid #4f493f; border-radius: 0.4rem; }
+      label { font-weight: 600; }
+      select, button { font: inherit; padding: 0.75rem; border: 1px solid #665d50; border-radius: 0.25rem; max-width: 100%; }
+      select { width: 100%; background: #302a23; color: #f3eee4; }
+      button { background: #dcb86b; color: #171512; cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      :focus-visible { outline: 2px solid #dcb86b; outline-offset: 4px; }
+      p { color: #b7aa98; line-height: 1.6; overflow-wrap: anywhere; }
+      [role="alert"] { color: #f4b4a6; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a href="/">← Home</a>
+      <h1>Settings</h1>
+      {% if error %}<p role="alert">{{ error }}</p>{% endif %}
+      {% if selected_model %}<p>Current model: {{ selected_model }}</p>{% endif %}
+      <form action="/settings" method="post">
+        <label for="trainer-model">Trainer model</label>
+        <select id="trainer-model" name="model" required {% if not models %}disabled{% endif %}>
+          <option value="" {% if selected_model not in models %}selected{% endif %} disabled>Choose a model</option>
+          {% for model in models %}
+          <option value="{{ model }}" {% if model == selected_model %}selected{% endif %}>{{ model }}</option>
+          {% endfor %}
+        </select>
+        <p>Models available through OpenCode. Your choice applies to the next Trainer responses, including existing Discussions.</p>
+        <button type="submit" {% if not models %}disabled{% endif %}>Save</button>
+      </form>
+    </main>
+  </body>
+</html>

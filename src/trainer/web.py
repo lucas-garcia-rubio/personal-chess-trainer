@@ -38,6 +38,7 @@ from trainer.application.discussions import (
     get_discussion,
 )
 from trainer.application.sync import SyncGames
+from trainer.application.trainer_settings import TrainerSettings
 from trainer.application.responses import DiscussionResponses
 from trainer.application.submit_discussion import SubmitDiscussion, RequestPracticalLine
 from trainer.application.discussion_view import discussion_view
@@ -205,6 +206,7 @@ def create_web_app(
     continue_discussion: ContinueDiscussion,
     candidate_evaluator: CandidateEvaluator | None = None,
     evaluator_unavailable_reason: str | None = None,
+    trainer_settings: TrainerSettings | None = None,
 ) -> FastAPI:
     evaluations = EvaluatePosition(storage, candidate_evaluator)
     responses = DiscussionResponses(storage, trainer_runtime, evaluations)
@@ -256,6 +258,40 @@ def create_web_app(
             "home.html",
             {"games": storage.list_games()},
         )
+
+    def render_settings(request: Request, error: str | None = None,
+                        status_code: int = 200) -> Response:
+        if trainer_settings is None:
+            raise HTTPException(status_code=503, detail="Trainer settings unavailable")
+        try:
+            models = trainer_settings.models()
+        except RuntimeError as unavailable:
+            models = []
+            error = str(unavailable)
+            status_code = 503
+        return _templates.TemplateResponse(
+            request, "settings.html",
+            {"models": models,
+             "selected_model": trainer_settings.selected_model(), "error": error},
+            status_code=status_code,
+        )
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_page(request: Request) -> Response:
+        return render_settings(request)
+
+    @app.post("/settings")
+    async def save_settings(request: Request) -> Response:
+        if trainer_settings is None:
+            raise HTTPException(status_code=503, detail="Trainer settings unavailable")
+        fields = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
+        try:
+            await run_in_threadpool(trainer_settings.select_model, fields.get("model", [""])[0])
+        except ValueError as error:
+            return await run_in_threadpool(render_settings, request, str(error), 422)
+        except RuntimeError as error:
+            return await run_in_threadpool(render_settings, request, str(error), 503)
+        return RedirectResponse("/settings", status_code=303)
 
     @app.post("/sync")
     def sync() -> RedirectResponse:
@@ -322,6 +358,7 @@ def create_web_app(
                 ),
                 "best_line_url": f"/analyses/{origin}/{origin_id}/best-line",
                 "trainer_availability": trainer_availability,
+                "trainer_model": trainer_settings.selected_model() if trainer_settings else None,
             },
         )
 

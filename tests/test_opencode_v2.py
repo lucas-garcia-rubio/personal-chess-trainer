@@ -6,9 +6,87 @@ import sys
 import httpx
 import pytest
 
-from trainer.adapters.opencode import OpenCodeRuntime, OpenCodeSessionClient
+from trainer.adapters.opencode import OpenCodeModelCatalog, OpenCodeRuntime, OpenCodeSessionClient
 from trainer.application.ports import ResponseControl, TrainerEvent
 from trainer.config import OpenCodeSettings
+
+
+def test_model_catalog_reads_cli_output_not_logs_and_rejects_invalid_lines(tmp_path: Path) -> None:
+    executable = tmp_path / "opencode"
+    executable.write_text(f"#!{sys.executable}\n" + '''
+import sys
+assert sys.argv[1:] == ["models"]
+print("diagnostic", file=sys.stderr)
+print("other/trainer\\nopenai/gpt-6.1-sol\\n\\nother/trainer\\nnot a model\\n")
+''')
+    executable.chmod(0o700)
+    assert OpenCodeModelCatalog(OpenCodeSettings(executable=executable)).list_models() == [
+        "openai/gpt-6.1-sol", "other/trainer",
+    ]
+
+
+@pytest.mark.parametrize("script", ["raise SystemExit(1)", "import time; time.sleep(5)"])
+def test_model_catalog_reports_failed_or_timed_out_command(tmp_path: Path, script: str) -> None:
+    executable = tmp_path / "opencode"
+    executable.write_text(f"#!{sys.executable}\n{script}\n")
+    executable.chmod(0o700)
+    with pytest.raises(RuntimeError, match="Could not list OpenCode models"):
+        OpenCodeModelCatalog(OpenCodeSettings(executable=executable, startup_timeout_seconds=1)).list_models()
+
+
+def test_runtime_uses_latest_selected_model_for_existing_session(tmp_path: Path) -> None:
+    executable = tmp_path / "opencode"
+    log = tmp_path / "requests.jsonl"
+    executable.write_text(f"#!{sys.executable}\nLOG = {str(log)!r}\n" + '''
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+    def reply(self, value):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(value).encode())
+    def do_GET(self):
+        if self.path == "/api/info":
+            self.reply({"version": "2.2.5"})
+        elif self.path == "/api/model/default":
+            self.reply({"data": {"id": "default", "providerID": "test"}})
+        else:
+            assert self.path == "/api/event"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'data: {"type":"server.connected","data":{}}\\n\\n')
+            self.wfile.write(b'data: {"type":"session.execution.succeeded","data":{"sessionID":"ses_1"}}\\n\\n')
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        with open(LOG, "a") as file:
+            file.write(json.dumps({"path": self.path, "body": body}) + "\\n")
+        self.reply({"data": {"id": "input"}})
+server = HTTPServer(("127.0.0.1", 0), Handler)
+print(f"server listening on http://127.0.0.1:{server.server_port}", flush=True)
+server.serve_forever()
+''')
+    executable.chmod(0o700)
+    selected: str | None = "openai/gpt-6.1-sol"
+    runtime = OpenCodeRuntime(
+        OpenCodeSettings(executable=executable, model="openai/gpt-6.1-sol"),
+        model_selection=lambda: selected,
+    )
+    try:
+        assert runtime.start().is_available
+        assert list(runtime.stream("ses_1", "", "first")) == [TrainerEvent("completed")]
+        selected = "other/trainer#fast"
+        assert list(runtime.stream("ses_1", "", "next")) == [TrainerEvent("completed")]
+    finally:
+        runtime.stop()
+    assert [json.loads(line) for line in log.read_text().splitlines()] == [
+        {"path": "/api/session/ses_1/model", "body": {"model": {"providerID": "openai", "id": "gpt-6.1-sol"}}},
+        {"path": "/api/session/ses_1/prompt", "body": {"text": "first"}},
+        {"path": "/api/session/ses_1/model", "body": {"model": {"providerID": "other", "id": "trainer", "variant": "fast"}}},
+        {"path": "/api/session/ses_1/prompt", "body": {"text": "next"}},
+    ]
 
 
 def test_sessions_use_v2_envelopes_location_agent_and_idle_interrupt() -> None:

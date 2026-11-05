@@ -55,6 +55,10 @@ class TrainerRuntimeAvailability:
         return cls(is_available=False, reason=reason)
 
 
+class TrainerModelCatalog(Protocol):
+    def list_models(self) -> list[str]: ...
+
+
 class TrainerRuntime(Protocol):
     def start(self) -> TrainerRuntimeAvailability: ...
 
@@ -111,6 +115,10 @@ class SessionCheckpoint:
 
 
 class LocalStorage(Protocol):
+    def trainer_model(self) -> str | None: ...
+
+    def set_trainer_model(self, model: str) -> None: ...
+
     def session_checkpoint(
         self, origin: str, origin_id: str, base_ply: int,
     ) -> SessionCheckpoint | None: ...

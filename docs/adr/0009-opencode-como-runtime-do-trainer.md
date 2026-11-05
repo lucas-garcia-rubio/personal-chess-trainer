@@ -9,7 +9,8 @@ O OpenCode acessa movimentos, avaliações e, futuramente, a Chess Library por u
 - O Personal Chess Trainer consome a API e o stream de eventos do `opencode serve`.
 - A aplicação inicia o servidor em `127.0.0.1` como processo filho e o encerra no shutdown.
 - As sessões executam em um diretório privado com configuração e agente próprios, separados do repositório e de ferramentas de desenvolvimento.
-- A escolha e a autenticação do modelo permanecem na configuração padrão do OpenCode.
+- A autenticação e o catálogo de modelos permanecem no OpenCode. A Home oferece Settings para escolher o modelo do Trainer a partir de `opencode models`; a preferência fica no SQLite e prevalece sobre `[opencode] model`. Sem preferência, vale o modelo configurado e, se omitido, o padrão do OpenCode.
+- O modelo escolhido é aplicado pela API V2 à sessão antes da próxima resposta, inclusive em Discussions existentes, sem reiniciar o runtime nem interromper uma resposta em andamento. A configuração global do OpenCode não é alterada.
 - Chamadas MCP passam pelos casos de uso da aplicação, que validam e persistem toda mudança antes de publicá-la ao navegador.
 - Uma sessão nova recebe o Discussion Context completo; sessões existentes recebem somente eventos posteriores e a Position ativa.
 - O MCP permite reler o Discussion Context por revisão; ferramentas que recebem uma revisão obsoleta não podem alterar a árvore de Variations.

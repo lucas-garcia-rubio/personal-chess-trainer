@@ -10,7 +10,8 @@ from trainer.config import Settings
 
 
 class _FakeDefaultTrainerRuntime:
-    def __init__(self, _settings: object) -> None:
+    def __init__(self, _settings: object, *,
+                 model_selection: Callable[[], str | None] | None = None) -> None:
         pass
 
     def start(self) -> TrainerRuntimeAvailability:

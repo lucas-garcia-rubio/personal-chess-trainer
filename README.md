@@ -42,7 +42,7 @@ flyway_path = "/caminho/para/flyway"
 path = "/caminho/para/opencode"
 startup_timeout_seconds = 10
 http_timeout_seconds = 5
-# Opcional: escolhe o modelo somente para o Trainer, sem alterar outras sessões.
+# Opcional: modelo inicial do Trainer, até escolher outro em Settings na Home.
 # Se omitido, usa o modelo padrão do OpenCode.
 model = "openai/gpt-6.1-sol"
 ```
@@ -59,6 +59,14 @@ trainer serve
 ```
 
 A Home estará disponível em <http://127.0.0.1:8000>.
+
+O botão **Settings** na Home permite escolher o modelo do Trainer. As opções vêm
+de `opencode models`, usando o executável configurado em `[opencode] path` ou no
+PATH. A escolha fica salva no SQLite e vale para as próximas respostas, inclusive
+em Discussions existentes, sem reiniciar a aplicação ou alterar o modelo global
+do OpenCode. Respostas em andamento não são interrompidas. Sem uma escolha salva,
+vale `[opencode] model` ou, se omitido, o padrão do OpenCode. Se o catálogo estiver
+indisponível, Settings mostra o erro e mantém a escolha anterior.
 
 ### OpenCode V2
 

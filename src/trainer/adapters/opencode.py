@@ -1,5 +1,5 @@
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 import os
 from pathlib import Path
 import re
@@ -26,9 +26,11 @@ _LISTENING_PATTERN = re.compile(
 class OpenCodeSessionClient:
     """The OpenCode V2 HTTP boundary; only visible assistant text leaves it."""
 
-    def __init__(self, client: httpx.Client, directory: str | None = None) -> None:
+    def __init__(self, client: httpx.Client, directory: str | None = None,
+                 model: str | None = None) -> None:
         self._client = client
         self._directory = directory
+        self._model = model
 
     def create_session(self) -> str:
         body: dict[str, object] = {"title": "Chess Discussion", "agent": "trainer"}
@@ -89,6 +91,17 @@ class OpenCodeSessionClient:
                         if control.cancelled.is_set():
                             yield TrainerEvent("interrupted")
                             return
+                        if self._model is not None:
+                            provider, model_id = self._model.split("/", 1)
+                            model_id, separator, variant = model_id.partition("#")
+                            model_ref = {"providerID": provider, "id": model_id}
+                            if separator:
+                                model_ref["variant"] = variant
+                            selection = self._client.post(
+                                f"/api/session/{quote(session_id, safe='')}/model",
+                                json={"model": model_ref},
+                            )
+                            selection.raise_for_status()
                         prompt = self._client.post(
                             f"/api/session/{quote(session_id, safe='')}/prompt",
                             json={"text": context},
@@ -149,9 +162,30 @@ class OpenCodeSessionClient:
         raise RuntimeError("OpenCode did not complete an assistant response.")
 
 
-class OpenCodeRuntime:
+class OpenCodeModelCatalog:
     def __init__(self, settings: OpenCodeSettings) -> None:
         self._settings = settings
+
+    def list_models(self) -> list[str]:
+        executable = self._settings.executable or shutil.which("opencode")
+        if executable is None:
+            raise RuntimeError("OpenCode executable was not found.")
+        try:
+            result = subprocess.run(
+                [str(executable), "models"], capture_output=True, text=True,
+                timeout=self._settings.startup_timeout_seconds, check=True,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise RuntimeError("Could not list OpenCode models. Check the OpenCode installation and configuration.") from error
+        return sorted({line.strip() for line in result.stdout.splitlines()
+                       if re.fullmatch(r"[^\s/]+/[^\s]+", line.strip())})
+
+
+class OpenCodeRuntime:
+    def __init__(self, settings: OpenCodeSettings, *,
+                 model_selection: Callable[[], str | None] | None = None) -> None:
+        self._settings = settings
+        self._model_selection = model_selection or (lambda: settings.model)
         self._process: subprocess.Popen[str] | None = None
         self._workspace: tempfile.TemporaryDirectory[str] | None = None
         self._client: httpx.Client | None = None
@@ -288,6 +322,7 @@ class OpenCodeRuntime:
             raise RuntimeError("OpenCode is unavailable.")
         return OpenCodeSessionClient(
             self._client, self._workspace.name if self._workspace is not None else None,
+            self._model_selection(),
         )
 
     def stop(self) -> None:

@@ -2,12 +2,13 @@ from fastapi import FastAPI
 import httpx
 
 from trainer.adapters.lichess import LichessGameSource
-from trainer.adapters.opencode import OpenCodeRuntime
+from trainer.adapters.opencode import OpenCodeModelCatalog, OpenCodeRuntime
 from trainer.adapters.sqlite import SQLiteStorage
 from trainer.adapters.stockfish import StockfishEvaluator
 from trainer.application.discussions import ContinueDiscussion
 from trainer.application.import_game import ImportGame
-from trainer.application.ports import CandidateEvaluator, PositionEvaluator, TrainerRuntime
+from trainer.application.ports import CandidateEvaluator, PositionEvaluator, TrainerRuntime, TrainerModelCatalog
+from trainer.application.trainer_settings import TrainerSettings
 from trainer.application.sync import SyncGames
 from trainer.config import Settings
 from trainer.web import create_web_app
@@ -20,8 +21,12 @@ def create_app(
     position_evaluator: PositionEvaluator | None = None,
     candidate_evaluator: CandidateEvaluator | None = None,
     trainer_runtime: TrainerRuntime | None = None,
+    model_catalog: TrainerModelCatalog | None = None,
 ) -> FastAPI:
     storage = SQLiteStorage(settings.database_path)
+    trainer_settings = TrainerSettings(
+        storage, model_catalog or OpenCodeModelCatalog(settings.opencode), settings.opencode.model,
+    )
     game_source = LichessGameSource(
         settings.lichess_username,
         transport=lichess_transport,
@@ -57,5 +62,8 @@ def create_app(
         continue_discussion=ContinueDiscussion(storage),
         candidate_evaluator=best_line_evaluator,
         evaluator_unavailable_reason=evaluator_unavailable_reason,
-        trainer_runtime=trainer_runtime or OpenCodeRuntime(settings.opencode),
+        trainer_runtime=trainer_runtime or OpenCodeRuntime(
+            settings.opencode, model_selection=trainer_settings.selected_model,
+        ),
+        trainer_settings=trainer_settings,
     )

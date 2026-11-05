@@ -311,7 +311,7 @@
           <div role="tabpanel" id="trainer-panel" aria-labelledby="trainer-tab" data-panel="trainer" hidden>
             <h2>Trainer</h2>
             {% if trainer_availability.is_available %}
-              <p role="status">Trainer available</p>
+              <p role="status">Trainer available{% if trainer_model %} · {{ trainer_model }}{% endif %}</p>
             {% else %}
               <p role="alert"><strong>Trainer unavailable.</strong> {{ trainer_availability.reason }}</p>
             {% endif %}

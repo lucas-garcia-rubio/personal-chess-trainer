@@ -1,5 +1,5 @@
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import StringIO
 import logging
 
@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from lichess_mock import LichessMock
 from trainer.application.ports import ResponseControl, TrainerEvent, TrainerRuntimeAvailability
 from trainer.bootstrap import create_app
-from trainer.config import Settings
+from trainer.config import OpenCodeSettings, Settings
 from trainer.adapters.opencode import OpenCodeRuntime
 
 
@@ -94,6 +94,33 @@ def test_analysis_shows_available_trainer_runtime(
     assert "Send to Trainer" in response.text
     assert runtime.starts == 1
     assert runtime.stops == 1
+
+
+def test_available_trainer_displays_the_current_model_beside_its_status(
+    migrated_settings: Callable[[str], Settings],
+    lichess_mock: LichessMock,
+) -> None:
+    class Models:
+        def list_models(self) -> list[str]:
+            return ["openai/gpt-6.1-sol", "other/trainer"]
+
+    settings = replace(
+        migrated_settings("Lance5500"),
+        opencode=OpenCodeSettings(model="openai/gpt-6.1-sol"),
+    )
+    with TestClient(create_app(
+        settings,
+        lichess_transport=lichess_mock.games_for("Lance5500"),
+        trainer_runtime=FakeTrainerRuntime(TrainerRuntimeAvailability.available()),
+        model_catalog=Models(),
+    )) as client:
+        client.post("/sync")
+        page = client.get("/analyses/lichess/q7ZvsdUF")
+        assert "Trainer available · openai/gpt-6.1-sol" in page.text
+        assert client.post("/settings", data={"model": "other/trainer"}).status_code == 200
+        page = client.get("/analyses/lichess/q7ZvsdUF")
+        assert "Trainer available · other/trainer" in page.text
+        assert "Trainer available · openai/gpt-6.1-sol" not in page.text
 
 
 def test_unavailable_trainer_keeps_the_application_available(
