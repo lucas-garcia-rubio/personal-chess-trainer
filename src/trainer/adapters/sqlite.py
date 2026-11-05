@@ -249,10 +249,11 @@ class SQLiteStorage:
 
     def list_games(
         self, results: tuple[str, ...] = (), time_controls: tuple[str, ...] = (),
+        categories: tuple[str, ...] = (),
     ) -> GameListing:
         predicates = []
         parameters: list[str] = []
-        for column, values in (("result", results), ("time_control", time_controls)):
+        for column, values in (("result", results), ("time_control", time_controls), ("speed", categories)):
             if values:
                 predicates.append(column + " IN (" + ",".join("?" for _ in values) + ")")
                 parameters.extend(values)
@@ -271,6 +272,9 @@ class SQLiteStorage:
             total=total,
             time_controls=tuple(row[0] for row in self._connection.execute(
                 "SELECT DISTINCT time_control FROM games ORDER BY time_control"
+            )),
+            categories=tuple(row[0] for row in self._connection.execute(
+                "SELECT DISTINCT speed FROM games ORDER BY speed"
             )),
         )
 

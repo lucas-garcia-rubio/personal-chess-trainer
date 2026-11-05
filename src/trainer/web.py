@@ -6,7 +6,7 @@ from fractions import Fraction
 import json
 from pathlib import Path
 from typing import TypedDict, cast
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
 import chess
 from fastapi import FastAPI, HTTPException, Request
@@ -258,13 +258,29 @@ def create_web_app(
             value for value in request.query_params.getlist("result")
             if value in {"win", "draw", "loss"}
         ))
-        time_controls = tuple(dict.fromkeys(request.query_params.getlist("time_control")))
-        listing = storage.list_games(results, time_controls)
+        time_mode = "category" if request.query_params.get("time_mode") == "category" else "exact"
+        inactive_parameter = "time_control" if time_mode == "category" else "category"
+        if inactive_parameter in request.query_params:
+            # Canonicalize mixed direct links as well as UI transitions: inactive
+            # criteria must never survive in the URL or the Analysis return link.
+            query = urlencode([(key, value) for key, value in request.query_params.multi_items()
+                               if key != inactive_parameter])
+            return RedirectResponse("/" + (f"?{query}" if query else ""), status_code=303)
+        time_controls = (tuple(dict.fromkeys(request.query_params.getlist("time_control")))
+                         if time_mode == "exact" else ())
+        categories = (tuple(dict.fromkeys(request.query_params.getlist("category")))
+                      if time_mode == "category" else ())
+        listing = storage.list_games(results, time_controls, categories)
         return _templates.TemplateResponse(
             request,
             "home.html",
             {"games": listing.games, "listing": listing, "results": results,
-             "time_controls": time_controls,
+             "time_controls": time_controls, "categories": categories, "time_mode": time_mode,
+             "category_options": [(value, "Desconhecida" if value.lower() in {"", "unknown", "?", "-"}
+                                   else value[0].upper() + value[1:]) for value in listing.categories],
+             "mode_urls": {mode: "/?" + urlencode(
+                 [("time_mode", mode)] + [("result", value) for value in results]
+             ) for mode in ("category", "exact")},
              "control_options": [(value, _time_control_label(value)) for value in listing.time_controls],
              "home_url": "/" + (f"?{request.url.query}" if request.url.query else "")},
         )

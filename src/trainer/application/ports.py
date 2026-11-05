@@ -181,6 +181,7 @@ class LocalStorage(Protocol):
 
     def list_games(
         self, results: tuple[str, ...] = (), time_controls: tuple[str, ...] = (),
+        categories: tuple[str, ...] = (),
     ) -> GameListing: ...
 
     def get_analysis(self, origin: str, origin_id: str) -> Analysis | None: ...

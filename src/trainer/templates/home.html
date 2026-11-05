@@ -93,6 +93,9 @@
       legend { color: #b7aa98; padding: 0 0.4rem; }
       fieldset label { display: inline-flex; gap: 0.4rem; align-items: center; cursor: pointer; }
       input[type="checkbox"] { accent-color: #dcb86b; width: 1.1rem; height: 1.1rem; }
+      .time-tabs { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }
+      .time-tabs [aria-selected="true"] { background: #dcb86b; border-color: #dcb86b; color: #171512; }
+      .time-mode-hint { color: #b7aa98; font-size: 0.85rem; }
       .game-list { display: grid; gap: 0.75rem; margin: 0; padding: 0; list-style: none; }
       .game-link {
         display: grid;
@@ -170,6 +173,25 @@
               </label>
             {% endfor %}
           </fieldset>
+          <nav class="time-tabs" role="tablist" aria-label="Modo de tempo">
+            {% for mode, label in [('category', 'Categoria'), ('exact', 'Controle exato')] %}
+              <a class="button" role="tab" aria-selected="{{ 'true' if time_mode == mode else 'false' }}"
+                 href="{{ home_url if time_mode == mode else mode_urls[mode] }}">{{ label }}</a>
+            {% endfor %}
+          </nav>
+          <p class="time-mode-hint">Trocar o modo limpa a seleção de tempo</p>
+          <input type="hidden" name="time_mode" value="{{ time_mode }}">
+          {% if time_mode == 'category' %}
+          <fieldset>
+            <legend>Categoria de Ritmo</legend>
+            {% for value, label in category_options %}
+              <label>
+                <input type="checkbox" name="category" value="{{ value }}"{% if value in categories %} checked{% endif %}>
+                {{ label }}
+              </label>
+            {% endfor %}
+          </fieldset>
+          {% else %}
           <fieldset>
             <legend>Controle de Tempo exato</legend>
             {% for value, label in control_options %}
@@ -179,13 +201,14 @@
               </label>
             {% endfor %}
           </fieldset>
+          {% endif %}
         </form>
-        {% if results or time_controls %}<p><a href="/">Limpar filtros</a></p>{% endif %}
+        {% if results or time_controls or categories %}<p><a href="/">Limpar filtros</a></p>{% endif %}
         {% if games %}
           <ul class="game-list">
             {% for game in games %}
               <li>
-                <a class="game-link" href="/analyses/{{ game.origin }}/{{ game.origin_id }}{% if results or time_controls %}?return_to={{ home_url | urlencode }}{% endif %}">
+                <a class="game-link" href="/analyses/{{ game.origin }}/{{ game.origin_id }}{% if results or time_controls or categories or time_mode == 'category' %}?return_to={{ home_url | urlencode }}{% endif %}">
                   <span>
                     <span class="game-opponent">vs {{ game.opponent }}</span>
                     <span class="game-meta">{{ game.result }} · {{ game.time_control }} · {{ game.critical_count }} Critical Moments</span>
@@ -200,7 +223,7 @@
             <span class="empty-mark" aria-hidden="true">
               <svg viewBox="0 0 32 32" focusable="false"><path d="M7 4h4v4h3V4h4v4h3V4h4v9l-4 3v8h3v4H8v-4h3v-8l-4-3z"/></svg>
             </span>
-            {% if results or time_controls %}
+            {% if results or time_controls or categories %}
             <h3>Nenhuma partida encontrada</h3>
             <p>Ajuste ou limpe os filtros para ver outras partidas.</p>
             {% else %}

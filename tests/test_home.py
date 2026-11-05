@@ -150,6 +150,9 @@ class HomeDocument(HTMLParser):
         self.checked_results: set[str] = set()
         self.time_controls: dict[str, str] = {}
         self.checked_time_controls: set[str] = set()
+        self.categories: dict[str, str] = {}
+        self.checked_categories: set[str] = set()
+        self._category: str | None = None
         self._control: str | None = None
         self.analysis_links: list[str] = []
         self.clear_link: str | None = None
@@ -165,6 +168,11 @@ class HomeDocument(HTMLParser):
             self.time_controls[self._control] = ""
             if "checked" in attributes:
                 self.checked_time_controls.add(self._control)
+        if tag == "input" and attributes.get("name") == "category":
+            self._category = attributes.get("value") or ""
+            self.categories[self._category] = ""
+            if "checked" in attributes:
+                self.checked_categories.add(self._category)
         if tag == "a":
             href = attributes.get("href") or ""
             if href.startswith("/analyses/"):
@@ -172,6 +180,8 @@ class HomeDocument(HTMLParser):
             self._link_href = href
 
     def handle_data(self, data: str) -> None:
+        if self._category is not None:
+            self.categories[self._category] += data.strip()
         if self._control is not None:
             self.time_controls[self._control] += data.strip()
         if data.strip() == "Limpar filtros":
@@ -180,6 +190,7 @@ class HomeDocument(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag == "label":
             self._control = None
+            self._category = None
         if tag == "a":
             self._link_href = None
 
@@ -421,3 +432,132 @@ def test_home_formats_large_controls_without_losing_seconds(
     with TestClient(app) as client:
         document = HomeDocument(client.get("/").text)
         assert document.time_controls["600000000000000003+5"] == "10000000000000000.05+5"
+
+
+@pytest.fixture
+def category_games_settings(migrated_settings: Callable[[str], Settings]) -> Settings:
+    settings = migrated_settings("Player")
+    storage = SQLiteStorage(settings.database_path)
+    try:
+        for index, (category, result, control) in enumerate([
+            ("blitz", "loss", "600+0"), ("rapid", "draw", "600+5"),
+            ("blitz", "win", "600+5"), ("bullet", "loss", "600+0"),
+            ("unknown", "draw", "600+0"), ("", "loss", "600+5"),
+            ("ultraBullet", "win", "600+0"), ("classical", "draw", "600+5"),
+            ("correspondence", "loss", "600+0"),
+        ]):
+            metadata, analysis = _stored_game(
+                origin_id=f"category-{index}", opponent=f"Category Opponent {index}",
+                played_at=(index + 1) * 1000, created_at=(20 - index) * 1000,
+            )
+            metadata = replace(metadata, time_control=control,
+                               canonical_document=json.dumps([chess.STARTING_FEN, "e4 e5"]))
+            # Deliberately unrelated clocks: categories must never be recalculated.
+            storage.save_game("raw", metadata, replace(analysis, speed=category, result=result))
+    finally:
+        storage.close()
+    return settings
+
+
+def test_home_combines_persisted_categories_with_player_results(
+    category_games_settings: Settings, lichess_mock: LichessMock,
+) -> None:
+    app = create_app(category_games_settings, lichess_transport=lichess_mock.fail_on_request("Home is local"))
+    with TestClient(app) as client:
+        response = client.get("/?time_mode=category&category=blitz&category=rapid&result=loss&result=draw")
+    document = HomeDocument(response.text)
+    assert document.checked_categories == {"blitz", "rapid"}
+    assert document.checked_results == {"loss", "draw"}
+    assert not document.time_controls
+    assert [link.split("?")[0] for link in document.analysis_links] == [
+        "/analyses/lichess/category-1", "/analyses/lichess/category-0",
+    ]
+    assert "2 de 9 partidas" in response.text
+    assert document.categories == {
+        "": "Desconhecida", "blitz": "Blitz", "bullet": "Bullet",
+        "classical": "Classical", "correspondence": "Correspondence",
+        "rapid": "Rapid", "ultraBullet": "UltraBullet", "unknown": "Desconhecida",
+    }
+
+
+@pytest.mark.parametrize(("mode", "active", "inactive", "expected"), [
+    ("category", ("category", "blitz"), ("time_control", "600+5"), [2, 0]),
+    ("exact", ("time_control", "600+0"), ("category", "rapid"), [8, 6, 4, 3, 0]),
+])
+def test_home_removes_inactive_time_criteria_from_direct_urls(
+    category_games_settings: Settings, lichess_mock: LichessMock,
+    mode: str, active: tuple[str, str], inactive: tuple[str, str], expected: list[int],
+) -> None:
+    from urllib.parse import parse_qs, urlencode, urlsplit
+    app = create_app(category_games_settings, lichess_transport=lichess_mock.fail_on_request("Home is local"))
+    with TestClient(app) as client:
+        response = client.get("/?" + urlencode([("time_mode", mode), active, inactive]))
+        query = parse_qs(urlsplit(str(response.url)).query)
+        assert inactive[0] not in query
+        assert query[active[0]] == [active[1]]
+        document = HomeDocument(response.text)
+        assert [link.split("?")[0] for link in document.analysis_links] == [
+            f"/analyses/lichess/category-{index}" for index in expected
+        ]
+        assert document.checked_results == set()
+        assert (document.checked_categories if mode == "category" else document.checked_time_controls) == {active[1]}
+
+
+@pytest.mark.parametrize(("categories", "results", "expected"), [
+    ([], [], [8, 7, 6, 5, 4, 3, 2, 1, 0]),
+    (["blitz", "rapid"], [], [2, 1, 0]),
+    (["blitz", "rapid"], ["loss", "draw"], [1, 0]),
+    (["blitz", "blitz"], ["win"], [2]),
+    (["bullet"], [], [3]), (["unknown"], [], [4]), ([""], [], [5]),
+    (["ultraBullet", "correspondence"], [], [8, 6]),
+    (["bullet"], ["draw"], []),
+    ([], ["draw"], [7, 4, 1]),
+])
+def test_home_category_options_stay_available_for_every_selection(
+    category_games_settings: Settings, lichess_mock: LichessMock,
+    categories: list[str], results: list[str], expected: list[int],
+) -> None:
+    from urllib.parse import urlencode
+    app = create_app(category_games_settings, lichess_transport=lichess_mock.fail_on_request("Home is local"))
+    query = urlencode({"time_mode": "category", "category": categories, "result": results}, doseq=True)
+    with TestClient(app) as client:
+        response = client.get("/?" + query)
+        document = HomeDocument(response.text)
+        assert document.checked_categories == set(categories)
+        assert document.checked_results == set(results)
+        assert set(document.categories) == {
+            "blitz", "rapid", "bullet", "unknown", "", "ultraBullet", "classical", "correspondence",
+        }
+        assert not document.time_controls
+        assert [link.split("?")[0] for link in document.analysis_links] == [
+            f"/analyses/lichess/category-{index}" for index in expected
+        ]
+        assert f"{len(expected)} de 9 partidas" in response.text
+        assert ("Nenhuma partida encontrada" in response.text) == (not expected)
+        assert bool(document.clear_link) == bool(categories or results)
+        if categories or results:
+            cleared = HomeDocument(client.get(document.clear_link or "/").text)
+            assert len(cleared.analysis_links) == 9
+            assert not cleared.checked_categories
+            assert not cleared.checked_results
+        if document.analysis_links:
+            analysis = client.get(document.analysis_links[0])
+            assert analysis.status_code == 200
+            assert f'href="/?{query.replace("&", "&amp;")}"' in analysis.text
+
+
+def test_category_mode_with_empty_library_keeps_tabs_and_no_restriction(
+    migrated_settings: Callable[[str], Settings], lichess_mock: LichessMock,
+) -> None:
+    app = create_app(migrated_settings("Player"),
+                     lichess_transport=lichess_mock.fail_on_request("Home is local"))
+    with TestClient(app) as client:
+        response = client.get("/?time_mode=category")
+        document = HomeDocument(response.text)
+        assert "0 de 0 partidas" in response.text
+        assert "Your next lesson starts here." in response.text
+        assert document.clear_link is None
+        assert not document.categories
+        assert not document.time_controls
+        assert 'role="tab" aria-selected="true"' in response.text
+        assert "Trocar o modo limpa a seleção de tempo" in response.text
